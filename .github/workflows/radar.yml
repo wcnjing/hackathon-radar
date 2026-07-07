@@ -1,0 +1,36 @@
+name: radar
+
+on:
+  schedule:
+    # 09:03 and 21:03 Singapore time (cron is UTC; SGT = UTC+8)
+    - cron: "3 1,13 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: radar
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Restore the newest seen-events DB; the unique key means the updated
+      # DB is saved back at the end of every run.
+      - name: Restore seen-events database
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: radar-db-${{ github.run_id }}
+          restore-keys: radar-db-
+
+      - name: Run radar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: uv run radar run

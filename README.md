@@ -50,18 +50,39 @@ uv run radar run --max-notify 5
 Seen events are remembered in `data/radar.db`, so you're only notified once per event.
 Events scoring below `min_score` (config.toml) are recorded but not posted.
 
-## Run on a schedule (9:03 and 21:03 daily)
+## Run on a schedule (9:03 and 21:03 SGT daily)
+
+Pick **one** of the two options — each keeps its own seen-events DB, so running both
+means duplicate notifications.
+
+### Option A (recommended): GitHub Actions — runs even when your Mac is off
+
+The workflow in `.github/workflows/radar.yml` runs twice daily on GitHub's servers.
+One-time setup after pushing the repo — add the three secrets (each command prompts
+you to paste the value, so nothing lands in shell history):
+
+```sh
+gh secret set TELEGRAM_BOT_TOKEN
+gh secret set TELEGRAM_CHAT_ID
+gh secret set ANTHROPIC_API_KEY
+
+gh workflow run radar.yml          # trigger a test run now
+gh run watch                       # watch it
+```
+
+The seen-events DB is persisted between runs via the Actions cache. Quirks: scheduled
+runs can start a few minutes late, and GitHub pauses schedules on repos with no
+commits for 60 days (any commit re-enables). If the cache is ever evicted, the next
+run re-notifies up to `max_per_run` events once.
+
+### Option B: launchd — local, only while the Mac is awake
 
 ```sh
 cp launchd/com.wenjing.hackathon-radar.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/com.wenjing.hackathon-radar.plist
 ```
 
-Logs go to `logs/radar.log`. To stop: `launchctl unload ~/Library/LaunchAgents/com.wenjing.hackathon-radar.plist`.
-
-Note launchd only fires while the Mac is awake; it catches up on wake if a time was
-missed. For a machine-independent schedule, move the same command to GitHub Actions
-cron later.
+Logs go to `logs/radar.log`; unload with `launchctl unload` on the same path.
 
 ## Tuning
 
