@@ -14,9 +14,13 @@ class TelegramError(RuntimeError):
     """Telegram API failure. Never includes the request URL — it embeds the bot token."""
 
 
+KIND_EMOJI = {"hackathon": "🛠", "networking": "🤝", "program": "🚀"}
+
+
 def format_message(event: Event, score: float, reason: str) -> str:
     e = html.escape
-    lines = [f"🛠 <b>{e(event.title)}</b>"]
+    emoji = KIND_EMOJI.get(event.kind, "🛠")
+    lines = [f"{emoji} <b>{e(event.title)}</b>", ""]
 
     meta = []
     if event.dates_text:

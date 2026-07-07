@@ -18,6 +18,7 @@ class Event:
     prize: str | None = None
     register_url: str | None = None  # direct signup link when distinct from url
     invite_only: bool = False
+    kind: str = "hackathon"  # "hackathon" | "networking" | "program" (Claude refines)
     organizer: str | None = None
     team_size: str | None = None  # e.g. "solo or teams up to 5" (enriched)
     brief: str | None = None  # 2-3 sentence challenge summary (enriched)

@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -18,13 +19,19 @@ The user's interest profile:
 
 For each event, return a score from 0 (irrelevant) to 10 (must-see) and a single short
 sentence explaining why this user would (or wouldn't) care. Judge from the title, tags,
-location, dates, and prize. Score every event you are given, using its exact id."""
+location, dates, and prize. Score every event you are given, using its exact id.
+
+Also classify each event's kind:
+- "hackathon" — build-and-submit competitions, buildathons, hack sprints, game jams
+- "networking" — meetups, talks, socials, demo days, mixers, founder breakfasts
+- "program" — accelerators, fellowships, multi-week structured programs"""
 
 
 class ScoredEvent(BaseModel):
     id: str
     score: int
     reason: str
+    kind: Literal["hackathon", "networking", "program"]
 
 
 class ScoreBatch(BaseModel):
@@ -107,6 +114,7 @@ def _claude_scores(
             event = by_id.get(scored.id)
             if event is not None:
                 results[event.key] = (float(scored.score), scored.reason.strip())
+                event.kind = scored.kind
 
     # Anything the model skipped falls back to the keyword scorer.
     for event in events:

@@ -28,16 +28,22 @@ def extract_next_data(html: str) -> dict:
     return json.loads(match.group(1))
 
 
+HACKATHON_TITLE_RE = re.compile(r"hack|buildathon|build-a-thon|sprint|\bjam\b", re.I)
+
+
 def parse_entry(entry: dict) -> Event | None:
     e = entry.get("event") or {}
     if not e.get("api_id") or not e.get("name") or not e.get("url"):
         return None
     geo = e.get("geo_address_info") or {}
     hosts = [h["name"] for h in entry.get("hosts") or [] if h.get("name")]
+    title = e["name"].strip()
     return Event(
         source="luma",
         external_id=e["api_id"],
-        title=e["name"].strip(),
+        title=title,
+        # Heuristic default; Claude scoring refines the kind when available.
+        kind="hackathon" if HACKATHON_TITLE_RE.search(title) else "networking",
         url=f"https://lu.ma/{e['url']}",
         dates_text=_format_start(e.get("start_at"), e.get("timezone")),
         starts_at=e.get("start_at"),

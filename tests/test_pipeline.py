@@ -150,6 +150,19 @@ class TestFormatMessage:
         assert "👥" not in msg
         assert "blockquote" not in msg
 
+    def test_blank_line_after_title(self):
+        msg = format_message(make_event(dates_text="Aug 1"), 6.0, "ok")
+        title_line, blank, rest = msg.split("\n", 2)
+        assert "Some Hackathon" in title_line
+        assert blank == ""
+
+    def test_kind_picks_emoji(self):
+        assert format_message(make_event(kind="hackathon"), 6.0, "").startswith("🛠")
+        assert format_message(make_event(kind="networking"), 6.0, "").startswith("🤝")
+        assert format_message(make_event(kind="program"), 6.0, "").startswith("🚀")
+        # unknown kinds fall back rather than crash
+        assert format_message(make_event(kind="mystery"), 6.0, "").startswith("🛠")
+
     def test_empty_reason_hides_score_line(self):
         msg = format_message(make_event(), 9.0, "")
         assert "💡" not in msg

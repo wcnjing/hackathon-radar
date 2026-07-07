@@ -79,6 +79,17 @@ def test_luma_parse_entry_skips_malformed():
     assert luma.parse_entry({"event": {"api_id": "x", "name": "No URL"}}) is None
 
 
+def test_luma_kind_heuristic():
+    def entry(name):
+        return {"event": {"api_id": "x", "name": name, "url": "slug"}}
+
+    assert luma.parse_entry(entry("Daytona HackSprint")).kind == "hackathon"
+    assert luma.parse_entry(entry("AI Buildathon Night")).kind == "hackathon"
+    assert luma.parse_entry(entry("Founders' Breakfast")).kind == "networking"
+    # "jam" needs word boundaries — "Jamie's Talk" is not a game jam
+    assert luma.parse_entry(entry("Jamie's Fireside Chat")).kind == "networking"
+
+
 def test_mlh_upcoming_filter():
     from hackathon_radar.models import Event
 
