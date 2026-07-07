@@ -15,6 +15,7 @@ class Event:
     online: bool = False
     tags: list[str] = field(default_factory=list)
     prize: str | None = None
+    register_url: str | None = None  # direct signup link when distinct from url
 
     @property
     def key(self) -> tuple[str, str]:

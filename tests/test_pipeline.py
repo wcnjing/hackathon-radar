@@ -108,6 +108,7 @@ class TestFormatMessage:
             location="Singapore",
             prize="$10,000",
             tags=["AI", "Web"],
+            register_url="https://example.com/register",
         )
         msg = format_message(event, 8.0, "Strong AI focus")
         assert "Hack &lt;World&gt; &amp; Co" in msg
@@ -116,7 +117,9 @@ class TestFormatMessage:
         assert "$10,000" in msg
         assert "Strong AI focus (8/10)" in msg
         assert 'href="https://example.com"' in msg
+        assert '<a href="https://example.com/register">Register here</a>' in msg
 
     def test_minimal_event(self):
         msg = format_message(make_event(), 6.0, "ok")
         assert "Some Hackathon" in msg
+        assert "Register here" not in msg  # no register link when none is known

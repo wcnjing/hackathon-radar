@@ -16,16 +16,20 @@ def parse_hackathon(h: dict) -> Event:
     location = (h.get("displayed_location") or {}).get("location", "") or ""
     prize_raw = h.get("prize_amount") or ""
     prize = _TAG_RE.sub("", prize_raw).strip() or None
+    url = h.get("url", "")
+    # Every Devpost hackathon subdomain serves its signup page at /register
+    register_url = url.rstrip("/") + "/register" if url else None
     return Event(
         source="devpost",
         external_id=str(h["id"]),
         title=h.get("title", "").strip(),
-        url=h.get("url", ""),
+        url=url,
         dates_text=h.get("submission_period_dates", ""),
         location=location,
         online=location.lower() == "online",
         tags=[t["name"] for t in h.get("themes", [])],
         prize=prize,
+        register_url=register_url,
     )
 
 

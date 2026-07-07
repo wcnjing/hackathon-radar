@@ -20,6 +20,7 @@ def test_devpost_parse():
     assert "Machine Learning/AI" in first.tags
     assert first.prize == "$2,000,000"  # HTML span stripped
     assert first.dates_text  # e.g. "May 19 - Aug 17, 2026"
+    assert first.register_url == first.url.rstrip("/") + "/register"
 
 
 def test_devpost_skips_closed_and_invite_only():

@@ -29,6 +29,8 @@ def format_message(event: Event, score: float, reason: str) -> str:
         lines.append(f"🏷 {e(', '.join(event.tags[:4]))}")
     lines.append(f"💡 {e(reason)} ({score:.0f}/10)")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
+    if event.register_url:
+        lines.append(f'📝 <a href="{e(event.register_url)}">Register here</a>')
     return "\n".join(lines)
 
 
