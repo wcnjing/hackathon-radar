@@ -12,14 +12,14 @@ from hackathon_radar.models import Event
 
 log = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You score hackathons and tech events for relevance to one specific user.
+SYSTEM_PROMPT = """You score hackathons and tech events for relevance to a specific audience.
 
-The user's interest profile:
+The audience profile:
 {profile}
 
 For each event, return a score from 0 (irrelevant) to 10 (must-see) and a single short
-sentence explaining why this user would (or wouldn't) care. Judge from the title, tags,
-location, dates, and prize. Score every event you are given, using its exact id.
+sentence explaining why this audience would (or wouldn't) care. Judge from the title,
+tags, location, dates, and prize. Score every event you are given, using its exact id.
 
 Also classify each event's kind:
 - "hackathon" — build-and-submit competitions, buildathons, hack sprints, game jams

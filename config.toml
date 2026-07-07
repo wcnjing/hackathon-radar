@@ -3,21 +3,27 @@
 [interests]
 # Free-text profile used by Claude to judge relevance. Edit freely.
 profile = """
-I'm a developer in Singapore interested in:
-- AI / ML / LLM hackathons and buildathons (highest priority), including events by
-  model providers (Anthropic, OpenAI, Google, AWS) and AI tooling companies
-- Student / university hackathons (NUS, NTU, SMU, MLH, student-friendly events)
-- Startup and founder events: startup weekends, pitch competitions, buildathons, demo days
-- Tech networking events and meetups in Singapore: AI/dev meetups, founder breakfasts,
-  builder nights, accelerator or fellowship programs
-Less interested in: pure crypto/web3-only hackathons, marketing or gambling events,
-and non-tech lifestyle events (fitness, arts and crafts, wellness).
+This channel serves tech undergraduate students in Singapore who want to level up:
+CS/engineering students, self-taught devs, and student builders.
+
+Highest priority:
+- Hackathons and buildathons, especially AI/ML/LLM ones and events by model providers
+  (Anthropic, OpenAI, Google, AWS) — student-friendly or open-entry preferred
+- Tech networking where students can learn and meet people: dev/AI meetups, builder
+  nights, tech talks, demo days, founder and startup events
+- Programs that upgrade students: accelerators, fellowships, bootcamps, and mentorship
+  programs open to undergrads
+
+Not a fit: non-tech lifestyle events (fitness, arts, wellness), marketing or sales
+events, pure crypto/web3-only events, senior-executive conferences, and anything
+requiring years of professional experience or expensive tickets.
 """
 # Used by the keyword fallback scorer when no Anthropic API key is configured.
 keywords = [
     "ai", "ml", "machine learning", "llm", "genai", "generative",
     "agent", "student", "university", "startup", "founder", "pitch",
     "meetup", "networking", "demo day", "accelerator", "builder", "developer",
+    "hackathon", "buildathon", "workshop", "tech talk", "fellowship", "bootcamp",
 ]
 # Events scoring below this (0-10) are recorded but not notified.
 min_score = 6
