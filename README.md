@@ -1,14 +1,17 @@
 # hackathon-radar
 
-Watches hackathon/event sources, scores each new event against your interests with
-Claude, and posts matches to a Telegram channel — so your phone buzzes when something
-worth joining appears.
+Watches hackathons, tech meetups, and networking events, scores each new one against
+your interests with Claude, and posts matches to a Telegram channel — so your phone
+buzzes when something worth joining appears.
 
-**Sources:** Devpost (JSON API), MLH season pages (schema.org microdata).
+**Sources:** Devpost (JSON API), MLH season pages (schema.org microdata), Luma city
+discover feed (`lu.ma/singapore`) for networking events and meetups.
 **Scope:** Singapore in-person + online/global events (configurable in `config.toml`).
 **Scoring:** `claude-haiku-4-5` rates each event 0–10 against the interest profile in
-`config.toml` and writes a one-line "why you'd care". Without an `ANTHROPIC_API_KEY`
-it falls back to keyword matching.
+`config.toml` and writes a one-line "why you'd care". New Devpost events are also
+enriched from their pages: team size, registration deadline, and a collapsed
+tap-to-expand challenge brief. Without Anthropic credentials everything degrades to
+keyword matching (no enrichment).
 
 ## Setup (one-time, ~5 minutes)
 

@@ -54,6 +54,12 @@ class TestKeywordScore:
         score, _ = keyword_score(event, self.INTERESTS)
         assert score <= 10
 
+    def test_no_substring_false_positives(self):
+        # "ai" must not match inside words like "trainocate" or "sustainability"
+        event = make_event(title="Sustainability Workshop", location="TRAINOCATE Pte Ltd")
+        score, reason = keyword_score(event, self.INTERESTS)
+        assert reason == KEYWORD_REASON_PREFIX + "none matched"
+
 
 class TestStore:
     def test_dedupe_roundtrip(self, tmp_path):
@@ -115,8 +121,10 @@ class TestFormatMessage:
             tags=["AI", "Web"],
             register_url="https://example.com/register",
             invite_only=True,
+            organizer="Acme Labs",
             team_size="solo or teams up to 5",
             brief="Build an AI agent that does <cool> things.",
+            deadline="register by Aug 2, 2026",
         )
         msg = format_message(event, 8.0, "Strong AI focus")
         assert "Hack &lt;World&gt; &amp; Co" in msg
@@ -125,6 +133,8 @@ class TestFormatMessage:
         assert "$10,000" in msg
         assert "👥 solo or teams up to 5" in msg
         assert "🔒 Invite only" in msg
+        assert "⏰ register by Aug 2, 2026" in msg
+        assert "👤 Acme Labs" in msg
         assert "Strong AI focus (8/10)" in msg
         assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
         assert 'href="https://example.com"' in msg

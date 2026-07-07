@@ -2,7 +2,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-from hackathon_radar.sources import devpost, mlh
+from hackathon_radar.sources import devpost, luma, mlh
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -53,6 +53,28 @@ def test_mlh_parse():
     assert any(e.online for e in events) or any(not e.online for e in events)
     # country codes come through for in-person events
     assert any(e.country for e in events if not e.online)
+
+
+def test_luma_parse():
+    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    events = [e for e in (luma.parse_entry(entry) for entry in data["entries"]) if e]
+    assert len(events) > 30, "SG discover feed should have many events"
+
+    first = events[0]
+    assert first.source == "luma"
+    assert first.title == "AI For Normies - Copilot"
+    assert first.url.startswith("https://lu.ma/")
+    assert first.country == "SG"
+    assert first.online is False
+    assert first.starts_at and "T" in first.starts_at
+    assert first.dates_text  # e.g. "Tue Jul 7, 6:30 PM" (in event's own timezone)
+
+    assert any(e.organizer for e in events), "host names should come through"
+
+
+def test_luma_parse_entry_skips_malformed():
+    assert luma.parse_entry({}) is None
+    assert luma.parse_entry({"event": {"api_id": "x", "name": "No URL"}}) is None
 
 
 def test_mlh_upcoming_filter():

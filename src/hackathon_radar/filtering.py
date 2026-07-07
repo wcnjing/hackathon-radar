@@ -1,5 +1,7 @@
 """Scope filtering and the keyword fallback scorer."""
 
+import re
+
 from hackathon_radar.models import Event
 
 
@@ -27,6 +29,7 @@ def keyword_score(event: Event, interests_cfg: dict) -> tuple[float, str]:
     """Fallback scorer when Claude isn't available. Coarse but predictable."""
     keywords = [k.lower() for k in interests_cfg.get("keywords", [])]
     haystack = " ".join([event.title, event.location, *event.tags]).lower()
-    hits = sorted({k for k in keywords if k in haystack})
+    # Word-boundary match: "ai" must not hit inside "trainocate" or "sustainability".
+    hits = sorted({k for k in keywords if re.search(rf"\b{re.escape(k)}\b", haystack)})
     score = min(10.0, 5.0 + 1.5 * len(hits))
     return score, KEYWORD_REASON_PREFIX + (", ".join(hits) if hits else "none matched")

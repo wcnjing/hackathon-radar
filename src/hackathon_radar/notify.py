@@ -23,6 +23,10 @@ def format_message(event: Event, score: float, reason: str) -> str:
     if meta:
         lines.append(" · ".join(meta))
 
+    if event.deadline:
+        lines.append(f"⏰ {e(event.deadline)}")
+    if event.organizer:
+        lines.append(f"👤 {e(event.organizer)}")
     if event.prize:
         lines.append(f"🏆 {e(event.prize)} in prizes")
     if event.team_size:

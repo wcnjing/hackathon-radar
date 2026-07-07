@@ -8,12 +8,16 @@ I'm a developer in Singapore interested in:
   model providers (Anthropic, OpenAI, Google, AWS) and AI tooling companies
 - Student / university hackathons (NUS, NTU, SMU, MLH, student-friendly events)
 - Startup and founder events: startup weekends, pitch competitions, buildathons, demo days
-Less interested in: pure crypto/web3-only hackathons, marketing or gambling events.
+- Tech networking events and meetups in Singapore: AI/dev meetups, founder breakfasts,
+  builder nights, accelerator or fellowship programs
+Less interested in: pure crypto/web3-only hackathons, marketing or gambling events,
+and non-tech lifestyle events (fitness, arts and crafts, wellness).
 """
 # Used by the keyword fallback scorer when no Anthropic API key is configured.
 keywords = [
     "ai", "ml", "machine learning", "llm", "genai", "generative",
     "agent", "student", "university", "startup", "founder", "pitch",
+    "meetup", "networking", "demo day", "accelerator", "builder", "developer",
 ]
 # Events scoring below this (0-10) are recorded but not notified.
 min_score = 6
@@ -33,6 +37,11 @@ pages = 2                 # pages of ~10 hackathons each, newest first
 
 [sources.mlh]
 enabled = true
+
+[sources.luma]
+enabled = true
+city = "singapore"        # lu.ma/<city> discover page
+limit = 50
 
 [notify]
 max_per_run = 10          # cap per run so the first run doesn't flood the channel

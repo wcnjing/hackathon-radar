@@ -31,6 +31,7 @@ def parse_hackathon(h: dict) -> Event:
         prize=prize,
         register_url=register_url,
         invite_only=bool(h.get("invite_only")),
+        organizer=h.get("organization_name") or None,
     )
 
 

@@ -1,13 +1,14 @@
 import logging
 
 from hackathon_radar.models import Event
-from hackathon_radar.sources import devpost, mlh
+from hackathon_radar.sources import devpost, luma, mlh
 
 log = logging.getLogger(__name__)
 
 FETCHERS = {
     "devpost": devpost.fetch,
     "mlh": mlh.fetch,
+    "luma": luma.fetch,
 }
 
 

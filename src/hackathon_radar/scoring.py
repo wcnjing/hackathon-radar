@@ -39,6 +39,7 @@ def _event_payload(event: Event) -> dict:
         "location": event.location or ("Online" if event.online else "unknown"),
         "dates": event.dates_text,
         "prize": event.prize,
+        "organizer": event.organizer,
         "team_size": event.team_size,
         "challenge": event.brief,
         "source": event.source,

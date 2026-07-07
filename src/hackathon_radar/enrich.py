@@ -25,12 +25,16 @@ PROMPT = """From the hackathon page text below, extract:
   "teams of 2-4", "solo only". Use null if the pages don't clearly say.
 - brief: 2-3 plain sentences on what participants actually build or submit (the
   challenge / problem statement) and any notable constraint or required tech.
-  No marketing fluff. Use null if the pages don't make it clear."""
+  No marketing fluff. Use null if the pages don't make it clear.
+- deadline: the registration or submission deadline as a short phrase with the
+  date, e.g. "register by Aug 17, 2026" or "submissions due Jul 10, 5pm ET".
+  Use null if no explicit deadline is stated."""
 
 
 class EventDetails(BaseModel):
     team_size: str | None
     brief: str | None
+    deadline: str | None
 
 
 def _page_text(html: str, limit: int) -> str:
@@ -93,3 +97,4 @@ def _enrich_one(event: Event, web: httpx.Client, client, model: str) -> None:
     details = response.parsed_output
     event.team_size = details.team_size
     event.brief = details.brief
+    event.deadline = details.deadline
