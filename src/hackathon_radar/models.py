@@ -8,6 +8,7 @@ class Event:
     title: str
     url: str
     dates_text: str = ""
+    time_left: str | None = None  # e.g. "about 1 month left" (joinability at a glance)
     starts_at: str | None = None  # ISO 8601 when the source provides it
     ends_at: str | None = None
     location: str = ""

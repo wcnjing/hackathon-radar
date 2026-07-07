@@ -19,12 +19,17 @@ def parse_hackathon(h: dict) -> Event:
     url = h.get("url", "")
     # Every Devpost hackathon subdomain serves its signup page at /register
     register_url = url.rstrip("/") + "/register" if url else None
+    # The date range is the submission window — label it so a past start date
+    # doesn't read as "event already over" (you can join until submissions close).
+    period = h.get("submission_period_dates", "")
+    dates_text = f"submissions {period}" if period else ""
     return Event(
         source="devpost",
         external_id=str(h["id"]),
         title=h.get("title", "").strip(),
         url=url,
-        dates_text=h.get("submission_period_dates", ""),
+        dates_text=dates_text,
+        time_left=h.get("time_left_to_submission") or None,
         location=location,
         online=location.lower() == "online",
         tags=[t["name"] for t in h.get("themes", [])],

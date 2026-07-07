@@ -116,6 +116,7 @@ class TestFormatMessage:
         event = make_event(
             title="Hack <World> & Co",
             dates_text="Aug 1 - 3, 2026",
+            time_left="26 days left",
             location="Singapore",
             prize="$10,000",
             tags=["AI", "Web"],
@@ -130,6 +131,7 @@ class TestFormatMessage:
         assert "Hack &lt;World&gt; &amp; Co" in msg
         assert "<World>" not in msg
         assert "Aug 1 - 3, 2026" in msg
+        assert "⏳ 26 days left" in msg
         assert "$10,000" in msg
         assert "👥 solo or teams up to 5" in msg
         assert "🔒 Invite only" in msg

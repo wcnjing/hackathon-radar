@@ -19,7 +19,9 @@ def test_devpost_parse():
     assert first.online is True
     assert "Machine Learning/AI" in first.tags
     assert first.prize == "$2,000,000"  # HTML span stripped
-    assert first.dates_text  # e.g. "May 19 - Aug 17, 2026"
+    # labelled so a past start date doesn't read as "already over"
+    assert first.dates_text.startswith("submissions ")
+    assert first.time_left  # e.g. "about 1 month left"
     assert first.register_url == first.url.rstrip("/") + "/register"
 
 

@@ -17,6 +17,8 @@ def format_message(event: Event, score: float, reason: str) -> str:
     meta = []
     if event.dates_text:
         meta.append(f"📅 {e(event.dates_text)}")
+    if event.time_left:
+        meta.append(f"⏳ {e(event.time_left)}")
     location = event.location or ("Online" if event.online else "")
     if location:
         meta.append(f"📍 {e(location)}")
