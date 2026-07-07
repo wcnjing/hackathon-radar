@@ -25,9 +25,17 @@ def format_message(event: Event, score: float, reason: str) -> str:
 
     if event.prize:
         lines.append(f"🏆 {e(event.prize)} in prizes")
+    if event.team_size:
+        lines.append(f"👥 {e(event.team_size)}")
+    if event.invite_only:
+        lines.append("🔒 Invite only")
     if event.tags:
         lines.append(f"🏷 {e(', '.join(event.tags[:4]))}")
-    lines.append(f"💡 {e(reason)} ({score:.0f}/10)")
+    if reason:
+        lines.append(f"💡 {e(reason)} ({score:.0f}/10)")
+    if event.brief:
+        # Collapsed by default in Telegram; tap to expand.
+        lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
     if event.register_url:
         lines.append(f'📝 <a href="{e(event.register_url)}">Register here</a>')

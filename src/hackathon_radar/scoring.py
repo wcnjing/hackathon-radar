@@ -39,30 +39,35 @@ def _event_payload(event: Event) -> dict:
         "location": event.location or ("Online" if event.online else "unknown"),
         "dates": event.dates_text,
         "prize": event.prize,
+        "team_size": event.team_size,
+        "challenge": event.brief,
         "source": event.source,
     }
 
 
-def score_events(events: list[Event], config: dict) -> dict[tuple[str, str], tuple[float, str]]:
+def score_events(
+    events: list[Event], config: dict, client=None
+) -> dict[tuple[str, str], tuple[float, str]]:
     """Return {event.key: (score, reason)} for every event."""
     interests = config.get("interests", {})
     if not events:
         return {}
-
-    try:
-        client = _make_client()
-    except Exception as exc:
-        log.info("Anthropic credentials unavailable (%s); using keyword scorer", exc)
+    if client is None:
         return {e.key: keyword_score(e, interests) for e in events}
+
+    import anthropic
 
     try:
         return _claude_scores(client, events, config)
+    except anthropic.AuthenticationError as exc:
+        log.warning("Anthropic auth failed (%s); using keyword scorer", exc.message)
+        return {e.key: keyword_score(e, interests) for e in events}
     except Exception:
         log.exception("Claude scoring failed, falling back to keyword scorer")
         return {e.key: keyword_score(e, interests) for e in events}
 
 
-def _make_client():
+def make_client():
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")

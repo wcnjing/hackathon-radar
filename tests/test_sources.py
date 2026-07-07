@@ -23,7 +23,7 @@ def test_devpost_parse():
     assert first.register_url == first.url.rstrip("/") + "/register"
 
 
-def test_devpost_skips_closed_and_invite_only():
+def test_devpost_skips_closed_and_flags_invite_only():
     data = {
         "hackathons": [
             {"id": 1, "title": "Closed", "open_state": "ended", "themes": []},
@@ -32,7 +32,8 @@ def test_devpost_skips_closed_and_invite_only():
         ]
     }
     events = devpost.parse_response(data)
-    assert [e.title for e in events] == ["Open"]
+    assert [e.title for e in events] == ["Invite", "Open"]
+    assert [e.invite_only for e in events] == [True, False]
 
 
 def test_mlh_parse():

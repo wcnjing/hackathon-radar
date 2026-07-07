@@ -16,6 +16,9 @@ class Event:
     tags: list[str] = field(default_factory=list)
     prize: str | None = None
     register_url: str | None = None  # direct signup link when distinct from url
+    invite_only: bool = False
+    team_size: str | None = None  # e.g. "solo or teams up to 5" (enriched)
+    brief: str | None = None  # 2-3 sentence challenge summary (enriched)
 
     @property
     def key(self) -> tuple[str, str]:

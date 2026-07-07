@@ -3,9 +3,10 @@ import logging
 import sys
 
 from hackathon_radar.config import db_path, load_config
-from hackathon_radar.filtering import in_scope
+from hackathon_radar.enrich import enrich_events
+from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope
 from hackathon_radar.notify import Telegram, format_message
-from hackathon_radar.scoring import score_events
+from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
 
@@ -26,7 +27,13 @@ def run(args: argparse.Namespace) -> int:
     new = [e for e in scoped if not store.is_seen(e)]
     log.info("fetched %d, in scope %d, new %d", len(events), len(scoped), len(new))
 
-    scores = score_events(new, config)
+    try:
+        client = make_client()
+    except Exception as exc:
+        log.info("Anthropic credentials unavailable (%s); keyword scoring only", exc)
+        client = None
+    enrich_events(new, config, client)
+    scores = score_events(new, config, client)
     min_score = config.get("interests", {}).get("min_score", 6)
     max_notify = args.max_notify or config.get("notify", {}).get("max_per_run", 10)
 
@@ -40,7 +47,9 @@ def run(args: argparse.Namespace) -> int:
             store.record(event, score, reason)
         if score < min_score or notified >= max_notify:
             continue
-        message = format_message(event, score, reason)
+        # Keyword-scorer reasons are DB debug detail, not worth a line on the card.
+        display_reason = "" if reason.startswith(KEYWORD_REASON_PREFIX) else reason
+        message = format_message(event, score, display_reason)
         if args.dry_run:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
         else:

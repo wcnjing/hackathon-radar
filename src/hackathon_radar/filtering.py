@@ -18,11 +18,15 @@ def in_scope(event: Event, scope_cfg: dict) -> bool:
     return local or event.online
 
 
+# Reasons carrying this prefix are debug detail for the database; the Telegram
+# message suppresses them (only Claude's "why you'd care" lines are shown).
+KEYWORD_REASON_PREFIX = "keywords: "
+
+
 def keyword_score(event: Event, interests_cfg: dict) -> tuple[float, str]:
     """Fallback scorer when Claude isn't available. Coarse but predictable."""
     keywords = [k.lower() for k in interests_cfg.get("keywords", [])]
     haystack = " ".join([event.title, event.location, *event.tags]).lower()
     hits = sorted({k for k in keywords if k in haystack})
     score = min(10.0, 5.0 + 1.5 * len(hits))
-    reason = f"keyword match: {', '.join(hits)}" if hits else "no interest keywords matched"
-    return score, reason
+    return score, KEYWORD_REASON_PREFIX + (", ".join(hits) if hits else "none matched")

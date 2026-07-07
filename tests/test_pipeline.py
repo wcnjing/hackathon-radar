@@ -1,6 +1,6 @@
 import argparse
 
-from hackathon_radar.filtering import in_scope, keyword_score
+from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope, keyword_score
 from hackathon_radar.models import Event
 from hackathon_radar.notify import format_message
 from hackathon_radar.store import Store
@@ -43,9 +43,11 @@ class TestKeywordScore:
         ai = make_event(title="AI Agents Hackathon", tags=["student hackathon"])
         boring = make_event(title="Knitting Meetup")
         ai_score, ai_reason = keyword_score(ai, self.INTERESTS)
-        boring_score, _ = keyword_score(boring, self.INTERESTS)
+        boring_score, boring_reason = keyword_score(boring, self.INTERESTS)
         assert ai_score > boring_score
-        assert "ai" in ai_reason
+        # reasons are DB debug detail, marked so the notifier can hide them
+        assert ai_reason.startswith(KEYWORD_REASON_PREFIX)
+        assert boring_reason.startswith(KEYWORD_REASON_PREFIX)
 
     def test_score_capped_at_ten(self):
         event = make_event(title="ai student startup", tags=["ai", "student", "startup"])
@@ -87,8 +89,11 @@ class TestDryRun:
         monkeypatch.setattr(cli, "load_config", lambda: config)
         monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
         monkeypatch.setattr(
-            cli, "score_events", lambda events, cfg: {e.key: (9.0, "great fit") for e in events}
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
         )
 
         args = argparse.Namespace(dry_run=True, max_notify=None)
@@ -109,13 +114,19 @@ class TestFormatMessage:
             prize="$10,000",
             tags=["AI", "Web"],
             register_url="https://example.com/register",
+            invite_only=True,
+            team_size="solo or teams up to 5",
+            brief="Build an AI agent that does <cool> things.",
         )
         msg = format_message(event, 8.0, "Strong AI focus")
         assert "Hack &lt;World&gt; &amp; Co" in msg
         assert "<World>" not in msg
         assert "Aug 1 - 3, 2026" in msg
         assert "$10,000" in msg
+        assert "👥 solo or teams up to 5" in msg
+        assert "🔒 Invite only" in msg
         assert "Strong AI focus (8/10)" in msg
+        assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
         assert 'href="https://example.com"' in msg
         assert '<a href="https://example.com/register">Register here</a>' in msg
 
@@ -123,3 +134,11 @@ class TestFormatMessage:
         msg = format_message(make_event(), 6.0, "ok")
         assert "Some Hackathon" in msg
         assert "Register here" not in msg  # no register link when none is known
+        assert "🔒" not in msg
+        assert "👥" not in msg
+        assert "blockquote" not in msg
+
+    def test_empty_reason_hides_score_line(self):
+        msg = format_message(make_event(), 9.0, "")
+        assert "💡" not in msg
+        assert "9/10" not in msg

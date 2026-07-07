@@ -30,6 +30,7 @@ def parse_hackathon(h: dict) -> Event:
         tags=[t["name"] for t in h.get("themes", [])],
         prize=prize,
         register_url=register_url,
+        invite_only=bool(h.get("invite_only")),
     )
 
 
@@ -37,8 +38,6 @@ def parse_response(data: dict) -> list[Event]:
     events = []
     for h in data.get("hackathons", []):
         if h.get("open_state") not in ("open", "upcoming"):
-            continue
-        if h.get("invite_only"):
             continue
         events.append(parse_hackathon(h))
     return events
