@@ -111,6 +111,8 @@ def test_telegram(args: argparse.Namespace) -> int:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # httpx logs full request URLs at INFO; Telegram URLs embed the bot token.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(prog="radar", description="Hackathon & event notifier")
     sub = parser.add_subparsers(dest="command", required=True)
 
