@@ -84,6 +84,23 @@ launchctl load ~/Library/LaunchAgents/com.wenjing.hackathon-radar.plist
 
 Logs go to `logs/radar.log`; unload with `launchctl unload` on the same path.
 
+## Anti-spam guardrails
+
+Layered so no failure mode floods the channel (all knobs in `[notify]`):
+
+1. **Only-new events** — the SQLite DB remembers everything ever seen
+2. **Score threshold** — below `min_score` is recorded silently
+3. **Per-run cap** — `max_per_run` (10)
+4. **Rolling daily cap** — `max_per_day` (15) across runs, counted from the DB, so
+   even a lost/evicted DB produces one bounded batch, not a flood
+5. **Repeat-title guard** — titles matching anything notified in the last
+   `duplicate_title_days` (14) are skipped; catches the same event cross-posted on
+   two sources and recurring weekly events that get fresh ids
+6. **Quiet hours** — posts between `quiet_start` and `quiet_end` (23:00–08:00 SGT)
+   deliver silently: they appear in the channel without pinging your phone
+7. **Fail-safe sends** — if Telegram errors mid-run, unsent events stay unrecorded
+   and are retried next run instead of being lost or hammered
+
 ## Tuning
 
 Everything about *what you get notified for* lives in `config.toml`:

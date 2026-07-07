@@ -1,8 +1,13 @@
 import argparse
 
-from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope, keyword_score
+from hackathon_radar.filtering import (
+    KEYWORD_REASON_PREFIX,
+    in_scope,
+    keyword_score,
+    normalize_title,
+)
 from hackathon_radar.models import Event
-from hackathon_radar.notify import Telegram, TelegramError, format_message
+from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
 from hackathon_radar.store import Store
 
 SCOPE = {"mode": "sg_plus_online", "home_country": "SG", "home_city": "singapore"}
@@ -167,6 +172,56 @@ class TestFormatMessage:
     def test_empty_reason_hides_reason_line(self):
         msg = format_message(make_event(), "")
         assert "💡" not in msg
+
+
+class TestSpamGuards:
+    def test_normalize_title(self):
+        assert normalize_title("AI Wednesdays #42 — July Edition!") == "ai wednesdays 42 july edition"
+        assert normalize_title("  AI   Wednesdays #43  ") != ""
+
+    def test_quiet_hours_wrap_midnight(self):
+        assert is_quiet_hour(23, 23, 8)
+        assert is_quiet_hour(2, 23, 8)
+        assert not is_quiet_hour(8, 23, 8)
+        assert not is_quiet_hour(12, 23, 8)
+        assert is_quiet_hour(10, 9, 12)  # non-wrapping window
+        assert not is_quiet_hour(3, 5, 5)  # start == end disables
+
+    def test_store_daily_count_and_titles(self, tmp_path):
+        store = Store(tmp_path / "t.db")
+        a = make_event(external_id="a", title="AI Meetup")
+        b = make_event(external_id="b", title="Never Sent")
+        store.record(a, 8.0, "")
+        store.record(b, 8.0, "")
+        store.mark_notified(a)
+        assert store.notified_count_since("2000-01-01T00:00:00+00:00") == 1
+        assert store.notified_titles_since("2000-01-01T00:00:00+00:00") == ["AI Meetup"]
+        assert store.notified_count_since("2999-01-01T00:00:00+00:00") == 0
+        store.close()
+
+    def test_same_title_notified_once_per_run(self, tmp_path, monkeypatch, capsys):
+        """Cross-source duplicates (or weekly reposts) collapse to one card."""
+        from hackathon_radar import cli
+
+        devpost_ev = make_event(source="devpost", external_id="1", title="AI Agents Jam!")
+        luma_ev = make_event(source="luma", external_id="2", title="ai agents jam")
+        config = {
+            "interests": {"keywords": [], "min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 5},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [devpost_ev, luma_ev])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {e.key: (9.0, "fit") for e in events},
+        )
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        assert capsys.readouterr().out.count("would notify") == 1
 
 
 class TestTelegramErrors:

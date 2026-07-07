@@ -1,11 +1,13 @@
 import argparse
 import logging
 import sys
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from hackathon_radar.config import db_path, load_config
 from hackathon_radar.enrich import enrich_events
-from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope
-from hackathon_radar.notify import Telegram, TelegramError, format_message
+from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope, normalize_title
+from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
 from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
@@ -35,7 +37,32 @@ def run(args: argparse.Namespace) -> int:
     enrich_events(new, config, client)
     scores = score_events(new, config, client)
     min_score = config.get("interests", {}).get("min_score", 6)
-    max_notify = args.max_notify or config.get("notify", {}).get("max_per_run", 10)
+    notify_cfg = config.get("notify", {})
+    max_notify = args.max_notify or notify_cfg.get("max_per_run", 10)
+
+    # Guardrail: rolling 24h cap across runs, so even a lost dedupe DB can't flood.
+    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
+    sent_today = store.notified_count_since(day_ago)
+    budget = max(0, notify_cfg.get("max_per_day", 15) - sent_today)
+    if budget < max_notify:
+        log.info("daily cap: %d sent in last 24h, budget now %d", sent_today, budget)
+        max_notify = budget
+
+    # Guardrail: skip anything whose title matches a recent notification —
+    # catches cross-source duplicates and recurring events with fresh ids.
+    dupe_days = notify_cfg.get("duplicate_title_days", 14)
+    dupe_cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=dupe_days)
+    ).isoformat(timespec="seconds")
+    recent_titles = {normalize_title(t) for t in store.notified_titles_since(dupe_cutoff)}
+
+    # Guardrail: deliver silently during quiet hours (no phone ping overnight).
+    local_hour = datetime.now(
+        ZoneInfo(notify_cfg.get("timezone", "Asia/Singapore"))
+    ).hour
+    silent = is_quiet_hour(
+        local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
+    )
 
     ranked = sorted(new, key=lambda e: scores[e.key][0], reverse=True)
     notified = 0
@@ -43,6 +70,11 @@ def run(args: argparse.Namespace) -> int:
         score, reason = scores[event.key]
         # Dry runs must not mark events as seen, or the first real run
         # would silently skip everything already previewed.
+        norm_title = normalize_title(event.title)
+        if norm_title and norm_title in recent_titles:
+            if not args.dry_run:
+                store.record(event, score, "skipped: same title as a recent notification")
+            continue
         if score < min_score or notified >= max_notify:
             if not args.dry_run:
                 store.record(event, score, reason)
@@ -54,7 +86,7 @@ def run(args: argparse.Namespace) -> int:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
         else:
             try:
-                telegram.send(message)
+                telegram.send(message, silent=silent)
             except TelegramError as exc:
                 # Not recorded as seen — it will be retried next run.
                 log.error("send failed, will retry next run: %s", exc)
@@ -62,6 +94,7 @@ def run(args: argparse.Namespace) -> int:
                 return 1
             store.record(event, score, reason)
             store.mark_notified(event)
+        recent_titles.add(norm_title)
         notified += 1
 
     log.info("notified %d event(s)%s", notified, " (dry run)" if args.dry_run else "")

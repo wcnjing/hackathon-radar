@@ -46,6 +46,18 @@ class Store:
         )
         self.conn.commit()
 
+    def notified_count_since(self, cutoff_iso: str) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) FROM events WHERE notified_at >= ?", (cutoff_iso,)
+        ).fetchone()
+        return row[0]
+
+    def notified_titles_since(self, cutoff_iso: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT title FROM events WHERE notified_at >= ?", (cutoff_iso,)
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
     def close(self) -> None:
         self.conn.close()
 

@@ -20,6 +20,11 @@ def in_scope(event: Event, scope_cfg: dict) -> bool:
     return local or event.online
 
 
+def normalize_title(title: str) -> str:
+    """Collapse a title for duplicate detection across sources and reposts."""
+    return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+
+
 # Reasons carrying this prefix are debug detail for the database; the Telegram
 # message suppresses them (only Claude's "why you'd care" lines are shown).
 KEYWORD_REASON_PREFIX = "keywords: "

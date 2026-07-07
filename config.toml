@@ -44,4 +44,9 @@ city = "singapore"        # lu.ma/<city> discover page
 limit = 50
 
 [notify]
-max_per_run = 10          # cap per run so the first run doesn't flood the channel
+max_per_run = 10           # cap per run so a single run can't flood the channel
+max_per_day = 15           # rolling 24h cap across runs (guards against DB loss)
+duplicate_title_days = 14  # skip events whose title matches a recent notification
+quiet_start = 23           # deliver silently (no ping) from 23:00...
+quiet_end = 8              # ...to 08:00; set both equal to disable
+timezone = "Asia/Singapore"

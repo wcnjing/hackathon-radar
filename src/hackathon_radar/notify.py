@@ -17,6 +17,16 @@ class TelegramError(RuntimeError):
 KIND_EMOJI = {"hackathon": "🛠", "networking": "🤝", "program": "🚀"}
 
 
+def is_quiet_hour(hour: int, start: int, end: int) -> bool:
+    """True when `hour` falls in the [start, end) window; handles midnight wrap.
+    start == end disables quiet hours entirely."""
+    if start == end:
+        return False
+    if start > end:  # e.g. 23 → 8 wraps past midnight
+        return hour >= start or hour < end
+    return start <= hour < end
+
+
 def format_message(event: Event, reason: str) -> str:
     e = html.escape
     emoji = KIND_EMOJI.get(event.kind, "🛠")
@@ -65,13 +75,14 @@ class Telegram:
     def configured(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, silent: bool = False) -> None:
         self._call(
             "sendMessage",
             chat_id=self.chat_id,
             text=text,
             parse_mode="HTML",
             disable_web_page_preview=False,
+            disable_notification=silent,
         )
 
     def get_updates(self) -> list[dict]:
