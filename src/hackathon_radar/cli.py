@@ -5,7 +5,7 @@ import sys
 from hackathon_radar.config import db_path, load_config
 from hackathon_radar.enrich import enrich_events
 from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope
-from hackathon_radar.notify import Telegram, format_message
+from hackathon_radar.notify import Telegram, TelegramError, format_message
 from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
@@ -41,11 +41,11 @@ def run(args: argparse.Namespace) -> int:
     notified = 0
     for event in ranked:
         score, reason = scores[event.key]
-        if not args.dry_run:
-            # Dry runs must not mark events as seen, or the first real run
-            # would silently skip everything already previewed.
-            store.record(event, score, reason)
+        # Dry runs must not mark events as seen, or the first real run
+        # would silently skip everything already previewed.
         if score < min_score or notified >= max_notify:
+            if not args.dry_run:
+                store.record(event, score, reason)
             continue
         # Keyword-scorer reasons are DB debug detail, not worth a line on the card.
         display_reason = "" if reason.startswith(KEYWORD_REASON_PREFIX) else reason
@@ -53,7 +53,14 @@ def run(args: argparse.Namespace) -> int:
         if args.dry_run:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
         else:
-            telegram.send(message)
+            try:
+                telegram.send(message)
+            except TelegramError as exc:
+                # Not recorded as seen — it will be retried next run.
+                log.error("send failed, will retry next run: %s", exc)
+                store.close()
+                return 1
+            store.record(event, score, reason)
             store.mark_notified(event)
         notified += 1
 
@@ -93,7 +100,11 @@ def test_telegram(args: argparse.Namespace) -> int:
     if not telegram.configured:
         log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set in .env")
         return 1
-    telegram.send("✅ hackathon-radar is connected. You'll get event alerts here.")
+    try:
+        telegram.send("✅ hackathon-radar is connected. You'll get event alerts here.")
+    except TelegramError as exc:
+        log.error("%s", exc)
+        return 1
     print("Sent — check your channel.")
     return 0
 

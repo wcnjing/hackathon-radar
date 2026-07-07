@@ -10,6 +10,10 @@ from hackathon_radar.models import Event
 API_BASE = "https://api.telegram.org/bot{token}"
 
 
+class TelegramError(RuntimeError):
+    """Telegram API failure. Never includes the request URL — it embeds the bot token."""
+
+
 def format_message(event: Event, score: float, reason: str) -> str:
     e = html.escape
     lines = [f"🛠 <b>{e(event.title)}</b>"]
@@ -58,19 +62,26 @@ class Telegram:
         return bool(self.token and self.chat_id)
 
     def send(self, text: str) -> None:
-        resp = httpx.post(
-            API_BASE.format(token=self.token) + "/sendMessage",
-            json={
-                "chat_id": self.chat_id,
-                "text": text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": False,
-            },
-            timeout=30,
+        self._call(
+            "sendMessage",
+            chat_id=self.chat_id,
+            text=text,
+            parse_mode="HTML",
+            disable_web_page_preview=False,
         )
-        resp.raise_for_status()
 
     def get_updates(self) -> list[dict]:
-        resp = httpx.get(API_BASE.format(token=self.token) + "/getUpdates", timeout=30)
-        resp.raise_for_status()
-        return resp.json().get("result", [])
+        return self._call("getUpdates")
+
+    def _call(self, method: str, **payload):
+        resp = httpx.post(
+            API_BASE.format(token=self.token) + f"/{method}", json=payload, timeout=30
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        if not data.get("ok"):
+            description = data.get("description") or f"HTTP {resp.status_code}"
+            raise TelegramError(f"Telegram {method} failed: {description}")
+        return data["result"]

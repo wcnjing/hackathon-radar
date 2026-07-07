@@ -2,7 +2,7 @@ import argparse
 
 from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope, keyword_score
 from hackathon_radar.models import Event
-from hackathon_radar.notify import format_message
+from hackathon_radar.notify import Telegram, TelegramError, format_message
 from hackathon_radar.store import Store
 
 SCOPE = {"mode": "sg_plus_online", "home_country": "SG", "home_city": "singapore"}
@@ -154,3 +154,25 @@ class TestFormatMessage:
         msg = format_message(make_event(), 9.0, "")
         assert "💡" not in msg
         assert "9/10" not in msg
+
+
+class TestTelegramErrors:
+    def test_error_carries_description_but_never_the_token(self, monkeypatch):
+        """Regression: httpx's raise_for_status quoted the request URL, which
+        embeds the bot token — errors must stay token-free."""
+        import pytest
+
+        from hackathon_radar import notify
+
+        class FakeResponse:
+            status_code = 403
+
+            def json(self):
+                return {"ok": False, "description": "Forbidden: bot is not a member"}
+
+        monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: FakeResponse())
+        telegram = Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "Forbidden: bot is not a member" in str(excinfo.value)
+        assert "SECRETTOKENVALUE" not in str(excinfo.value)

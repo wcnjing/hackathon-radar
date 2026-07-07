@@ -2,8 +2,8 @@ name: radar
 
 on:
   schedule:
-    # 09:03 and 21:03 Singapore time (cron is UTC; SGT = UTC+8)
-    - cron: "3 1,13 * * *"
+    # every 6 hours at :03 — 02:03 / 08:03 / 14:03 / 20:03 Singapore time (cron is UTC)
+    - cron: "3 */6 * * *"
   workflow_dispatch: {}
 
 concurrency:

@@ -50,7 +50,7 @@ uv run radar run --max-notify 5
 Seen events are remembered in `data/radar.db`, so you're only notified once per event.
 Events scoring below `min_score` (config.toml) are recorded but not posted.
 
-## Run on a schedule (9:03 and 21:03 SGT daily)
+## Run on a schedule (every 6 hours)
 
 Pick **one** of the two options — each keeps its own seen-events DB, so running both
 means duplicate notifications.
