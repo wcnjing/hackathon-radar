@@ -49,7 +49,7 @@ def run(args: argparse.Namespace) -> int:
             continue
         # Keyword-scorer reasons are DB debug detail, not worth a line on the card.
         display_reason = "" if reason.startswith(KEYWORD_REASON_PREFIX) else reason
-        message = format_message(event, score, display_reason)
+        message = format_message(event, display_reason)
         if args.dry_run:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
         else:

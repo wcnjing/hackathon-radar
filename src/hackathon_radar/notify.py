@@ -17,7 +17,7 @@ class TelegramError(RuntimeError):
 KIND_EMOJI = {"hackathon": "🛠", "networking": "🤝", "program": "🚀"}
 
 
-def format_message(event: Event, score: float, reason: str) -> str:
+def format_message(event: Event, reason: str) -> str:
     e = html.escape
     emoji = KIND_EMOJI.get(event.kind, "🛠")
     lines = [f"{emoji} <b>{e(event.title)}</b>", ""]
@@ -46,7 +46,7 @@ def format_message(event: Event, score: float, reason: str) -> str:
     if event.tags:
         lines.append(f"🏷 {e(', '.join(event.tags[:4]))}")
     if reason:
-        lines.append(f"💡 {e(reason)} ({score:.0f}/10)")
+        lines.append(f"💡 {e(reason)}")
     if event.brief:
         # Collapsed by default in Telegram; tap to expand.
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
