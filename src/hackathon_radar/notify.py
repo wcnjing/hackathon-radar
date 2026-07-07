@@ -27,7 +27,7 @@ def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     return start <= hour < end
 
 
-def format_message(event: Event, reason: str) -> str:
+def format_message(event: Event) -> str:
     e = html.escape
     emoji = KIND_EMOJI.get(event.kind, "🛠")
     lines = [f"{emoji} <b>{e(event.title)}</b>", ""]
@@ -55,8 +55,8 @@ def format_message(event: Event, reason: str) -> str:
         lines.append("🔒 Invite only")
     if event.tags:
         lines.append(f"🏷 {e(', '.join(event.tags[:4]))}")
-    if reason:
-        lines.append(f"💡 {e(reason)}")
+    # Scores and Claude's relevance reasons stay in the database — the public
+    # channel gets factual event info only.
     if event.brief:
         # Collapsed by default in Telegram; tap to expand.
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")

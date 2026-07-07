@@ -8,10 +8,11 @@ buzzes when something worth joining appears.
 discover feed (`lu.ma/singapore`) for networking events and meetups.
 **Scope:** Singapore in-person + online/global events (configurable in `config.toml`).
 **Scoring:** `claude-haiku-4-5` rates each event 0–10 against the interest profile in
-`config.toml` and writes a one-line "why you'd care". New Devpost events are also
-enriched from their pages: team size, registration deadline, and a collapsed
-tap-to-expand challenge brief. Without Anthropic credentials everything degrades to
-keyword matching (no enrichment).
+`config.toml` — scores and reasons stay in the database (backend-only); the channel
+cards show factual event info, so they read fine in a public channel. New Devpost
+events are also enriched from their pages: team size, registration deadline, and a
+collapsed tap-to-expand challenge brief. Without Anthropic credentials everything
+degrades to keyword matching (no enrichment).
 
 ## Setup (one-time, ~5 minutes)
 

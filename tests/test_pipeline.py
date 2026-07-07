@@ -132,7 +132,7 @@ class TestFormatMessage:
             brief="Build an AI agent that does <cool> things.",
             deadline="register by Aug 2, 2026",
         )
-        msg = format_message(event, "Strong AI focus")
+        msg = format_message(event)
         assert "Hack &lt;World&gt; &amp; Co" in msg
         assert "<World>" not in msg
         assert "Aug 1 - 3, 2026" in msg
@@ -142,14 +142,15 @@ class TestFormatMessage:
         assert "🔒 Invite only" in msg
         assert "⏰ register by Aug 2, 2026" in msg
         assert "👤 Acme Labs" in msg
-        assert "💡 Strong AI focus" in msg
-        assert "/10" not in msg  # scores are internal, never shown on the card
+        # scores and relevance reasons are backend-only; cards stay public-friendly
+        assert "/10" not in msg
+        assert "💡" not in msg
         assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
         assert 'href="https://example.com"' in msg
         assert '<a href="https://example.com/register">Register here</a>' in msg
 
     def test_minimal_event(self):
-        msg = format_message(make_event(), "ok")
+        msg = format_message(make_event())
         assert "Some Hackathon" in msg
         assert "Register here" not in msg  # no register link when none is known
         assert "🔒" not in msg
@@ -157,21 +158,17 @@ class TestFormatMessage:
         assert "blockquote" not in msg
 
     def test_blank_line_after_title(self):
-        msg = format_message(make_event(dates_text="Aug 1"), "ok")
+        msg = format_message(make_event(dates_text="Aug 1"))
         title_line, blank, rest = msg.split("\n", 2)
         assert "Some Hackathon" in title_line
         assert blank == ""
 
     def test_kind_picks_emoji(self):
-        assert format_message(make_event(kind="hackathon"), "").startswith("🛠")
-        assert format_message(make_event(kind="networking"), "").startswith("🤝")
-        assert format_message(make_event(kind="program"), "").startswith("🚀")
+        assert format_message(make_event(kind="hackathon")).startswith("🛠")
+        assert format_message(make_event(kind="networking")).startswith("🤝")
+        assert format_message(make_event(kind="program")).startswith("🚀")
         # unknown kinds fall back rather than crash
-        assert format_message(make_event(kind="mystery"), "").startswith("🛠")
-
-    def test_empty_reason_hides_reason_line(self):
-        msg = format_message(make_event(), "")
-        assert "💡" not in msg
+        assert format_message(make_event(kind="mystery")).startswith("🛠")
 
 
 class TestSpamGuards:

@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from hackathon_radar.config import db_path, load_config
 from hackathon_radar.enrich import enrich_events
-from hackathon_radar.filtering import KEYWORD_REASON_PREFIX, in_scope, normalize_title
+from hackathon_radar.filtering import in_scope, normalize_title
 from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
 from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
@@ -79,9 +79,7 @@ def run(args: argparse.Namespace) -> int:
             if not args.dry_run:
                 store.record(event, score, reason)
             continue
-        # Keyword-scorer reasons are DB debug detail, not worth a line on the card.
-        display_reason = "" if reason.startswith(KEYWORD_REASON_PREFIX) else reason
-        message = format_message(event, display_reason)
+        message = format_message(event)
         if args.dry_run:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
         else:
