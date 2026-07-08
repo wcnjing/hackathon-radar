@@ -86,10 +86,17 @@ def run(args: argparse.Namespace) -> int:
         score, reason = scores[event.key]
         norm_title = normalize_title(event.title)
         if norm_title and norm_title in recent_titles:
+            log.info("skip (duplicate title): %s", event.title)
             if not args.dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
-        if score < min_score or len(to_notify) >= max_notify:
+        if score < min_score:
+            log.info("skip (score %.0f < %d): %s", score, min_score, event.title)
+            if not args.dry_run:
+                store.record(event, score, reason)
+            continue
+        if len(to_notify) >= max_notify:
+            log.info("skip (over cap): %s", event.title)
             if not args.dry_run:
                 store.record(event, score, reason)
             continue
