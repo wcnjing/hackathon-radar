@@ -14,6 +14,7 @@ class Event:
     location: str = ""
     country: str | None = None  # ISO 3166 alpha-2 when known
     online: bool = False
+    full: bool = False  # registration closed/waitlist-only where the source says so
     tags: list[str] = field(default_factory=list)
     prize: str | None = None
     register_url: str | None = None  # direct signup link when distinct from url

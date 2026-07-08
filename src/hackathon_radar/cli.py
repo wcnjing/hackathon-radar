@@ -24,10 +24,21 @@ def run(args: argparse.Namespace) -> int:
         log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — use --dry-run or fill in .env")
         return 1
 
+    scope_cfg = config.get("scope", {})
+    include_full = scope_cfg.get("include_full", False)
     events = fetch_all(config)
-    scoped = [e for e in events if in_scope(e, config.get("scope", {}))]
-    new = [e for e in scoped if not store.is_seen(e)]
-    log.info("fetched %d, in scope %d, new %d", len(events), len(scoped), len(new))
+    scoped = [e for e in events if in_scope(e, scope_cfg)]
+    # Drop full / waitlist-only events (kept before dedupe, so one that later
+    # frees up still gets picked up on a subsequent run).
+    joinable = [e for e in scoped if include_full or not e.full]
+    new = [e for e in joinable if not store.is_seen(e)]
+    log.info(
+        "fetched %d, in scope %d, joinable %d, new %d",
+        len(events),
+        len(scoped),
+        len(joinable),
+        len(new),
+    )
 
     try:
         client = make_client()

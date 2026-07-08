@@ -29,6 +29,8 @@ def extract_next_data(html: str) -> dict:
 
 
 HACKATHON_TITLE_RE = re.compile(r"hack|buildathon|build-a-thon|sprint|\bjam\b", re.I)
+# Luma registration_availability values that mean "you can't just sign up".
+FULL_AVAILABILITY = {"waitlist", "sold_out", "closed"}
 
 
 def parse_entry(entry: dict) -> Event | None:
@@ -51,6 +53,7 @@ def parse_entry(entry: dict) -> Event | None:
         location=geo.get("address") or geo.get("city_state") or "",
         country=geo.get("country_code"),
         online=e.get("location_type") == "online",
+        full=entry.get("registration_availability") in FULL_AVAILABILITY,
         organizer=", ".join(hosts[:3]) or None,
     )
 

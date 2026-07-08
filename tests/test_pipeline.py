@@ -221,6 +221,34 @@ class TestSpamGuards:
         assert capsys.readouterr().out.count("would notify") == 1
 
 
+class TestFullEvents:
+    def _run(self, tmp_path, monkeypatch, events, scope):
+        from hackathon_radar import cli
+
+        config = {"interests": {"min_score": 1}, "scope": scope, "notify": {"max_per_run": 9}}
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+        )
+        cli.run(argparse.Namespace(dry_run=True, max_notify=None))
+
+    def test_full_event_dropped_by_default(self, tmp_path, monkeypatch, capsys):
+        open_ev = make_event(external_id="1", title="Open Event")
+        full_ev = make_event(external_id="2", title="Full Event", full=True)
+        self._run(tmp_path, monkeypatch, [open_ev, full_ev], {"mode": "global"})
+        out = capsys.readouterr().out
+        assert "Open Event" in out
+        assert "Full Event" not in out
+
+    def test_include_full_opt_in(self, tmp_path, monkeypatch, capsys):
+        full_ev = make_event(external_id="2", title="Full Event", full=True)
+        self._run(tmp_path, monkeypatch, [full_ev], {"mode": "global", "include_full": True})
+        assert "Full Event" in capsys.readouterr().out
+
+
 class TestEnrichmentScope:
     def test_enrichment_only_touches_notified_events(self, tmp_path, monkeypatch, capsys):
         """Cost guard: enrichment (paid per-event page calls) must run only for

@@ -32,6 +32,7 @@ min_score = 6
 mode = "sg_plus_online"   # "sg_plus_online" | "sg_only" | "global"
 home_country = "SG"
 home_city = "singapore"
+include_full = false      # true also posts full / waitlist-only events (where known)
 
 [scoring]
 model = "claude-haiku-4-5"   # cheapest model; $1 / $5 per 1M input / output tokens

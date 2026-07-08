@@ -79,6 +79,19 @@ def test_luma_parse_entry_skips_malformed():
     assert luma.parse_entry({"event": {"api_id": "x", "name": "No URL"}}) is None
 
 
+def test_luma_flags_full_events():
+    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    by_id = {}
+    for entry in data["entries"]:
+        ev = luma.parse_entry(entry)
+        if ev:
+            by_id[ev.external_id] = (ev, entry.get("registration_availability"))
+    # every waitlist event is flagged full; every open one is not
+    assert any(full for full, _ in ((ev.full, a) for ev, a in by_id.values()))
+    for ev, availability in by_id.values():
+        assert ev.full == (availability in luma.FULL_AVAILABILITY)
+
+
 def test_luma_kind_heuristic():
     def entry(name):
         return {"event": {"api_id": "x", "name": name, "url": "slug"}}
