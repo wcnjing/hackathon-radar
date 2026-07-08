@@ -34,7 +34,9 @@ def run(args: argparse.Namespace) -> int:
     except Exception as exc:
         log.info("Anthropic credentials unavailable (%s); keyword scoring only", exc)
         client = None
-    enrich_events(new, config, client)
+
+    # Score first (cheap, batched); enrichment — one page-fetching Claude call per
+    # event — is deferred until we know which events actually get posted.
     scores = score_events(new, config, client)
     min_score = config.get("interests", {}).get("min_score", 6)
     notify_cfg = config.get("notify", {})
@@ -64,21 +66,33 @@ def run(args: argparse.Namespace) -> int:
         local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
     )
 
+    # First pass: pick the events that clear every gate; record the rest now.
+    # Dry runs must not mark events as seen, or the first real run would
+    # silently skip everything already previewed.
     ranked = sorted(new, key=lambda e: scores[e.key][0], reverse=True)
-    notified = 0
+    to_notify = []
     for event in ranked:
         score, reason = scores[event.key]
-        # Dry runs must not mark events as seen, or the first real run
-        # would silently skip everything already previewed.
         norm_title = normalize_title(event.title)
         if norm_title and norm_title in recent_titles:
             if not args.dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
-        if score < min_score or notified >= max_notify:
+        if score < min_score or len(to_notify) >= max_notify:
             if not args.dry_run:
                 store.record(event, score, reason)
             continue
+        recent_titles.add(norm_title)
+        to_notify.append(event)
+
+    # Only now spend on enrichment — one page-fetching Claude call per event —
+    # and only for the handful actually being posted.
+    if config.get("enrich", {}).get("enabled", True):
+        enrich_events(to_notify, config, client)
+
+    # Second pass: send.
+    for event in to_notify:
+        score, reason = scores[event.key]
         message = format_message(event)
         if args.dry_run:
             print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
@@ -92,10 +106,8 @@ def run(args: argparse.Namespace) -> int:
                 return 1
             store.record(event, score, reason)
             store.mark_notified(event)
-        recent_titles.add(norm_title)
-        notified += 1
 
-    log.info("notified %d event(s)%s", notified, " (dry run)" if args.dry_run else "")
+    log.info("notified %d event(s)%s", len(to_notify), " (dry run)" if args.dry_run else "")
     store.close()
     return 0
 

@@ -111,6 +111,22 @@ Everything about *what you get notified for* lives in `config.toml`:
 - `scope.mode` — `sg_plus_online` / `sg_only` / `global`
 - `sources.*.enabled` — turn sources on/off
 
+## Cost
+
+Uses `claude-haiku-4-5` (the cheapest model). Two things call the API, both **only
+for new events** — a run that finds nothing new (the common case) costs $0:
+
+- **Scoring** — one batched call per ~20 new events. Cheap.
+- **Enrichment** — one page-fetching call per event, but **only for events actually
+  being posted** (after scoring + threshold + cap). This is the main cost driver, so
+  it's deliberately the last and narrowest step.
+
+Steady state is a few new events a day → fractions of a cent. Costs spike only when
+you **clear the dedupe cache and re-run**, which reprocesses the whole event pool —
+treat that as a paid setup action, not routine. To cut spend to the bare minimum, set
+`enrich.enabled = false` in `config.toml` (cards then show source data only, no brief
+or extracted deadline/team-size).
+
 ## Development
 
 ```sh

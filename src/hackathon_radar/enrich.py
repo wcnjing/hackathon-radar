@@ -73,7 +73,7 @@ def enrich_events(events: list[Event], config: dict, client) -> None:
 
 
 def _enrich_one(event: Event, web: httpx.Client, client, model: str) -> None:
-    landing = _page_text(web.get(event.url).text, 6_000)
+    landing = _page_text(web.get(event.url).text, 4_000)
     rules = ""
     try:
         rules = _eligibility_excerpt(web.get(event.url.rstrip("/") + "/rules").text)

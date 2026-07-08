@@ -34,8 +34,14 @@ home_country = "SG"
 home_city = "singapore"
 
 [scoring]
-model = "claude-haiku-4-5"
+model = "claude-haiku-4-5"   # cheapest model; $1 / $5 per 1M input / output tokens
 batch_size = 20
+
+[enrich]
+# Per-event page fetch + Claude extraction of team size, deadline, and challenge
+# brief. Runs ONLY for events about to be posted. Set false to disable entirely
+# (cards then show source data only) if you want the absolute minimum spend.
+enabled = true
 
 [sources.devpost]
 enabled = true

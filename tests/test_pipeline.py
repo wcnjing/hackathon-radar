@@ -221,6 +221,37 @@ class TestSpamGuards:
         assert capsys.readouterr().out.count("would notify") == 1
 
 
+class TestEnrichmentScope:
+    def test_enrichment_only_touches_notified_events(self, tmp_path, monkeypatch, capsys):
+        """Cost guard: enrichment (paid per-event page calls) must run only for
+        events that clear the score threshold and cap, not every new event."""
+        from hackathon_radar import cli
+
+        good = make_event(source="devpost", external_id="1", title="AI Hackathon")
+        weak = make_event(source="devpost", external_id="2", title="Meh Event")
+        config = {
+            "interests": {"min_score": 6},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 5},
+            "enrich": {"enabled": True},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [good, weak])
+        monkeypatch.setattr(cli, "make_client", lambda: object())
+        monkeypatch.setattr(
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {good.key: (9.0, "great"), weak.key: (2.0, "weak")},
+        )
+        enriched = []
+        monkeypatch.setattr(cli, "enrich_events", lambda evs, cfg, client: enriched.extend(evs))
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        # only the event that will actually be posted was enriched
+        assert [e.title for e in enriched] == ["AI Hackathon"]
+
+
 class TestTelegramErrors:
     def test_error_carries_description_but_never_the_token(self, monkeypatch):
         """Regression: httpx's raise_for_status quoted the request URL, which
