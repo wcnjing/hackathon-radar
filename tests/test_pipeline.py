@@ -280,6 +280,69 @@ class TestEnrichmentScope:
         assert [e.title for e in enriched] == ["AI Hackathon"]
 
 
+class TestSendSpacing:
+    def test_interval_between_but_not_after_last(self, tmp_path, monkeypatch):
+        from hackathon_radar import cli
+
+        sent, sleeps = [], []
+
+        class FakeTelegram:
+            configured = True
+
+            def send(self, text, silent=False):
+                sent.append(text)
+
+        config = {
+            "interests": {"min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 9, "send_interval_seconds": 30},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "Telegram", lambda: FakeTelegram())
+        monkeypatch.setattr(cli.time, "sleep", lambda s: sleeps.append(s))
+        events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(3)]
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+        )
+
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
+        assert len(sent) == 3
+        assert sleeps == [30, 30]  # gaps between 3 messages, none trailing
+
+    def test_interval_zero_disables_sleep(self, tmp_path, monkeypatch):
+        from hackathon_radar import cli
+
+        sleeps = []
+
+        class FakeTelegram:
+            configured = True
+
+            def send(self, text, silent=False):
+                pass
+
+        config = {
+            "interests": {"min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 9, "send_interval_seconds": 0},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "Telegram", lambda: FakeTelegram())
+        monkeypatch.setattr(cli.time, "sleep", lambda s: sleeps.append(s))
+        events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(2)]
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+        )
+
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
+        assert sleeps == []
+
+
 class TestTelegramErrors:
     def test_error_carries_description_but_never_the_token(self, monkeypatch):
         """Regression: httpx's raise_for_status quoted the request URL, which

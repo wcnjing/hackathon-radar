@@ -63,3 +63,4 @@ duplicate_title_days = 14  # skip events whose title matches a recent notificati
 quiet_start = 23           # deliver silently (no ping) from 23:00...
 quiet_end = 8              # ...to 08:00; set both equal to disable
 timezone = "Asia/Singapore"
+send_interval_seconds = 30 # gap between messages so a batch isn't one burst; 0 = off

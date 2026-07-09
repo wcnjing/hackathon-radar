@@ -1,6 +1,7 @@
 import argparse
 import logging
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -108,8 +109,10 @@ def run(args: argparse.Namespace) -> int:
     if config.get("enrich", {}).get("enabled", True):
         enrich_events(to_notify, config, client)
 
-    # Second pass: send.
-    for event in to_notify:
+    # Second pass: send, spacing messages out so a batch doesn't arrive as a
+    # single burst of phone buzzes.
+    interval = notify_cfg.get("send_interval_seconds", 30)
+    for i, event in enumerate(to_notify):
         score, reason = scores[event.key]
         message = format_message(event)
         if args.dry_run:
@@ -124,6 +127,8 @@ def run(args: argparse.Namespace) -> int:
                 return 1
             store.record(event, score, reason)
             store.mark_notified(event)
+            if interval > 0 and i < len(to_notify) - 1:
+                time.sleep(interval)
 
     log.info("notified %d event(s)%s", len(to_notify), " (dry run)" if args.dry_run else "")
     store.close()

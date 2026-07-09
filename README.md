@@ -99,7 +99,9 @@ Layered so no failure mode floods the channel (all knobs in `[notify]`):
    two sources and recurring weekly events that get fresh ids
 6. **Quiet hours** — posts between `quiet_start` and `quiet_end` (23:00–08:00 SGT)
    deliver silently: they appear in the channel without pinging your phone
-7. **Fail-safe sends** — if Telegram errors mid-run, unsent events stay unrecorded
+7. **Spaced sends** — `send_interval_seconds` (30) puts a gap between messages so a
+   batch trickles in instead of arriving as one burst of buzzes (set 0 to disable)
+8. **Fail-safe sends** — if Telegram errors mid-run, unsent events stay unrecorded
    and are retried next run instead of being lost or hammered
 
 ## Tuning
