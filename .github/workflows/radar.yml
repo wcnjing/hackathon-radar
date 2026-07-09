@@ -6,8 +6,12 @@ on:
     - cron: "3 */6 * * *"
   workflow_dispatch: {}
 
+# Never run two radar runs at once — they'd both restore the same seen-events
+# DB and double-send. A run that triggers while one is in progress waits for it
+# to finish (cancel-in-progress: false) rather than running alongside it.
 concurrency:
   group: radar
+  cancel-in-progress: false
 
 jobs:
   run:
