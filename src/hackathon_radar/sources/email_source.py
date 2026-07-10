@@ -136,13 +136,21 @@ def fetch(source_cfg: dict) -> list[Event]:
     try:
         mail = imaplib.IMAP4_SSL(host)
         mail.login(address, password)
-        mail.select(folder, readonly=True)
+        status, select_data = mail.select(folder, readonly=True)
+        if status != "OK":
+            log.warning("email: select %r failed: %s %s", folder, status, select_data)
+            return []
+        total = int(select_data[0])
         _, data = mail.uid("search", None, f"UID {last_seen + 1}:*")
     except imaplib.IMAP4.error as exc:
         log.warning("email source IMAP failure: %s", exc)
         return []
 
     uids = new_uids([int(u) for u in data[0].split()], last_seen)
+    log.info(
+        "email: %s has %d message(s); %d new since uid %d",
+        folder, total, len(uids), last_seen,
+    )
     if not uids:
         mail.logout()
         return []
