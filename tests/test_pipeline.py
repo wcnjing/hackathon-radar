@@ -170,6 +170,14 @@ class TestFormatMessage:
         # unknown kinds fall back rather than crash
         assert format_message(make_event(kind="mystery")).startswith("🛠")
 
+    def test_experience_level_line(self):
+        assert "🌱 Beginner friendly" in format_message(make_event(level="beginner"))
+        assert "⚡ Some experience helpful" in format_message(make_event(level="intermediate"))
+        assert "🔥 Advanced / competitive" in format_message(make_event(level="advanced"))
+        # unclear level → no badge (no badge beats a wrong badge)
+        msg = format_message(make_event(level=None))
+        assert "🌱" not in msg and "🔥" not in msg
+
 
 class TestSpamGuards:
     def test_normalize_title(self):

@@ -56,6 +56,17 @@ enabled = true
 city = "singapore"        # lu.ma/<city> discover page
 limit = 50
 
+[sources.watchlist]
+# Organizer pages that post events nowhere else: company hackathon pages, school
+# clubs, uni departments. Any URL works — Claude extracts events from the page
+# text, and only re-reads a page when its content changes (near-zero idle cost).
+# Note: JS-only pages (content invisible without a browser) can't be watched.
+enabled = true
+pages = [
+    "https://www.nushackers.org/",
+]
+assume_country = "SG"     # events from these pages count as local unless stated
+
 [notify]
 max_per_run = 10           # cap per run so a single run can't flood the channel
 max_per_day = 15           # rolling 24h cap across runs (guards against DB loss)

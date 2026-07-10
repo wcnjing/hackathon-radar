@@ -16,6 +16,13 @@ class TelegramError(RuntimeError):
 
 KIND_EMOJI = {"hackathon": "🛠", "networking": "🤝", "program": "🚀"}
 
+# Shown only when the event's own text signals a level; no badge beats a wrong badge.
+LEVEL_LINE = {
+    "beginner": "🌱 Beginner friendly",
+    "intermediate": "⚡ Some experience helpful",
+    "advanced": "🔥 Advanced / competitive",
+}
+
 
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     """True when `hour` falls in the [start, end) window; handles midnight wrap.
@@ -43,6 +50,8 @@ def format_message(event: Event) -> str:
     if meta:
         lines.append(" · ".join(meta))
 
+    if event.level in LEVEL_LINE:
+        lines.append(LEVEL_LINE[event.level])
     if event.deadline:
         lines.append(f"⏰ {e(event.deadline)}")
     if event.organizer:

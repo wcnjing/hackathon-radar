@@ -24,7 +24,14 @@ tags, location, dates, and prize. Score every event you are given, using its exa
 Also classify each event's kind:
 - "hackathon" — build-and-submit competitions, buildathons, hack sprints, game jams
 - "networking" — meetups, talks, socials, demo days, mixers, founder breakfasts
-- "program" — accelerators, fellowships, multi-week structured programs"""
+- "program" — accelerators, fellowships, multi-week structured programs
+
+And its experience level, ONLY when the event's text clearly signals it:
+- "beginner" — first-timers welcome, no experience needed, intro workshops, student hackathons
+- "intermediate" — assumes you can already build; typical dev meetups and open hackathons
+- "advanced" — expert/practitioner crowd or seriously competitive (qualifiers, huge prizes)
+- "unclear" — the text doesn't say. Prefer "unclear" over guessing: a wrong
+  "beginner" label burns trust with exactly the students this serves."""
 
 
 class ScoredEvent(BaseModel):
@@ -32,6 +39,7 @@ class ScoredEvent(BaseModel):
     score: int
     reason: str
     kind: Literal["hackathon", "networking", "program"]
+    level: Literal["beginner", "intermediate", "advanced", "unclear"]
 
 
 class ScoreBatch(BaseModel):
@@ -115,6 +123,7 @@ def _claude_scores(
             if event is not None:
                 results[event.key] = (float(scored.score), scored.reason.strip())
                 event.kind = scored.kind
+                event.level = None if scored.level == "unclear" else scored.level
 
     # Anything the model skipped falls back to the keyword scorer.
     for event in events:

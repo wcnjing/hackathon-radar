@@ -5,7 +5,10 @@ your interests with Claude, and posts matches to a Telegram channel — so your 
 buzzes when something worth joining appears.
 
 **Sources:** Devpost (JSON API), MLH season pages (schema.org microdata), Luma city
-discover feed (`lu.ma/singapore`) for networking events and meetups.
+discover feed (`lu.ma/singapore`) for networking events and meetups, plus a
+**watchlist** of arbitrary organizer pages (school clubs, company hackathon sites) —
+add any URL to `sources.watchlist.pages` and Claude extracts events whenever the
+page's content changes.
 **Scope:** Singapore in-person + online/global events (configurable in `config.toml`).
 **Scoring:** `claude-haiku-4-5` rates each event 0–10 against the interest profile in
 `config.toml` — scores and reasons stay in the database (backend-only); the channel
