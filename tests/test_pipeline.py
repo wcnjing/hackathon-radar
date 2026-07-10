@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime, timedelta, timezone
 
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
@@ -84,6 +85,51 @@ class TestStore:
         assert not store.is_seen(make_event(source="mlh", external_id="42"))
         store.close()
 
+    def test_queue_roundtrip_orders_by_score(self, tmp_path):
+        store = Store(tmp_path / "test.db")
+        low = make_event(external_id="low", title="Low")
+        high = make_event(external_id="high", title="High", brief="the <brief> survives")
+        store.queue_event(low, 6.0, "ok")
+        store.queue_event(high, 9.0, "great")
+        assert store.queue_depth() == 2
+
+        event, score, reason = store.pop_queued()
+        assert event.external_id == "high" and score == 9.0
+        assert event.brief == "the <brief> survives"  # full payload roundtrips
+        store.mark_notified(event)
+
+        assert store.pop_queued()[0].external_id == "low"
+        store.close()
+
+    def test_migration_from_pre_queue_schema(self, tmp_path):
+        import sqlite3
+
+        db = tmp_path / "old.db"
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "CREATE TABLE events (source TEXT NOT NULL, external_id TEXT NOT NULL,"
+            " title TEXT, url TEXT, first_seen TEXT, score REAL, reason TEXT,"
+            " notified_at TEXT, PRIMARY KEY (source, external_id))"
+        )
+        conn.execute("INSERT INTO events (source, external_id, title) VALUES ('devpost','1','Old')")
+        conn.commit()
+        conn.close()
+
+        store = Store(db)  # must add payload column + meta table, not crash
+        assert store.is_seen(make_event(source="devpost", external_id="1"))
+        assert store.queue_depth() == 0
+        store.queue_event(make_event(external_id="2"), 7.0, "r")
+        assert store.queue_depth() == 1
+        store.close()
+
+    def test_meta_roundtrip(self, tmp_path):
+        store = Store(tmp_path / "test.db")
+        assert store.get_meta("last_send_at") is None
+        store.set_meta("last_send_at", "2026-07-10T00:00:00+00:00")
+        store.set_meta("last_send_at", "2026-07-10T01:00:00+00:00")
+        assert store.get_meta("last_send_at") == "2026-07-10T01:00:00+00:00"
+        store.close()
+
 
 class TestDryRun:
     def test_dry_run_does_not_mark_events_seen(self, tmp_path, monkeypatch, capsys):
@@ -109,7 +155,7 @@ class TestDryRun:
 
         args = argparse.Namespace(dry_run=True, max_notify=None)
         assert cli.run(args) == 0
-        assert "would notify" in capsys.readouterr().out
+        assert "would queue" in capsys.readouterr().out
 
         store = Store(tmp_path / "radar.db")
         assert not store.is_seen(event)
@@ -226,7 +272,7 @@ class TestSpamGuards:
         )
 
         assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
-        assert capsys.readouterr().out.count("would notify") == 1
+        assert capsys.readouterr().out.count("would queue") == 1
 
 
 class TestFullEvents:
@@ -288,11 +334,28 @@ class TestEnrichmentScope:
         assert [e.title for e in enriched] == ["AI Hackathon"]
 
 
-class TestSendSpacing:
-    def test_interval_between_but_not_after_last(self, tmp_path, monkeypatch):
+class TestDripQueue:
+    def _wire(self, monkeypatch, tmp_path, events, telegram):
         from hackathon_radar import cli
 
-        sent, sleeps = [], []
+        config = {
+            "interests": {"min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_day": 15, "send_interval_seconds": 1800, "fetch_every_hours": 6},
+            "enrich": {"enabled": False},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "Telegram", lambda: telegram)
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+        )
+        return cli
+
+    def test_one_post_per_run_until_gap_elapses(self, tmp_path, monkeypatch):
+        sent = []
 
         class FakeTelegram:
             configured = True
@@ -300,55 +363,39 @@ class TestSendSpacing:
             def send(self, text, silent=False):
                 sent.append(text)
 
-        config = {
-            "interests": {"min_score": 1},
-            "scope": {"mode": "global"},
-            "notify": {"max_per_run": 9, "send_interval_seconds": 30},
-        }
-        monkeypatch.setattr(cli, "load_config", lambda: config)
-        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
-        monkeypatch.setattr(cli, "Telegram", lambda: FakeTelegram())
-        monkeypatch.setattr(cli.time, "sleep", lambda s: sleeps.append(s))
         events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(3)]
-        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
-        monkeypatch.setattr(cli, "make_client", lambda: None)
-        monkeypatch.setattr(
-            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
-        )
+        cli = self._wire(monkeypatch, tmp_path, events, FakeTelegram())
+        args = argparse.Namespace(dry_run=False, max_notify=None)
 
-        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
-        assert len(sent) == 3
-        assert sleeps == [30, 30]  # gaps between 3 messages, none trailing
+        assert cli.run(args) == 0  # ingest queues 3, drips exactly 1
+        assert len(sent) == 1
+        store = Store(tmp_path / "radar.db")
+        assert store.queue_depth() == 2
 
-    def test_interval_zero_disables_sleep(self, tmp_path, monkeypatch):
-        from hackathon_radar import cli
+        assert cli.run(args) == 0  # 30-min gap not elapsed → nothing sent
+        assert len(sent) == 1
 
-        sleeps = []
+        past = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(timespec="seconds")
+        store.set_meta("last_send_at", past)  # pretend last post was 31 min ago
+        store.close()
+        assert cli.run(args) == 0
+        assert len(sent) == 2
 
-        class FakeTelegram:
+    def test_failed_send_stays_queued(self, tmp_path, monkeypatch):
+        class FailingTelegram:
             configured = True
 
             def send(self, text, silent=False):
-                pass
+                raise TelegramError("Telegram sendMessage failed: whatever")
 
-        config = {
-            "interests": {"min_score": 1},
-            "scope": {"mode": "global"},
-            "notify": {"max_per_run": 9, "send_interval_seconds": 0},
-        }
-        monkeypatch.setattr(cli, "load_config", lambda: config)
-        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
-        monkeypatch.setattr(cli, "Telegram", lambda: FakeTelegram())
-        monkeypatch.setattr(cli.time, "sleep", lambda s: sleeps.append(s))
-        events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(2)]
-        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
-        monkeypatch.setattr(cli, "make_client", lambda: None)
-        monkeypatch.setattr(
-            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
-        )
+        events = [make_event(external_id="1", title="Event 1")]
+        cli = self._wire(monkeypatch, tmp_path, events, FailingTelegram())
 
-        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
-        assert sleeps == []
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 1
+        store = Store(tmp_path / "radar.db")
+        assert store.queue_depth() == 1  # still queued — retried next run
+        assert store.notified_count_since("2000-01-01T00:00:00+00:00") == 0
+        store.close()
 
 
 class TestTelegramErrors:

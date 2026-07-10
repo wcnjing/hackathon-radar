@@ -2,8 +2,9 @@ name: radar
 
 on:
   schedule:
-    # every 6 hours at :03 — 02:03 / 08:03 / 14:03 / 20:03 Singapore time (cron is UTC)
-    - cron: "3 */6 * * *"
+    # Every 30 minutes: each run posts at most ONE queued event (30-min drip
+    # pacing); sources are only re-fetched every 6 hours (tracked in the DB).
+    - cron: "7,37 * * * *"
   workflow_dispatch: {}
 
 # Never run two radar runs at once — they'd both restore the same seen-events

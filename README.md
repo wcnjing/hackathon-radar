@@ -54,7 +54,11 @@ uv run radar run --max-notify 5
 Seen events are remembered in `data/radar.db`, so you're only notified once per event.
 Events scoring below `min_score` (config.toml) are recorded but not posted.
 
-## Run on a schedule (every 6 hours)
+## Run on a schedule (drip-fed)
+
+The workflow fires **every 30 minutes**; each firing drips at most one queued post.
+Sources are only re-fetched every `fetch_every_hours` (6) — in-between runs are
+short queue-drain checks that cost seconds of runner time and no API calls.
 
 Pick **one** of the two options — each keeps its own seen-events DB, so running both
 means duplicate notifications.
@@ -94,18 +98,18 @@ Layered so no failure mode floods the channel (all knobs in `[notify]`):
 
 1. **Only-new events** — the SQLite DB remembers everything ever seen
 2. **Score threshold** — below `min_score` is recorded silently
-3. **Per-run cap** — `max_per_run` (10)
-4. **Rolling daily cap** — `max_per_day` (15) across runs, counted from the DB, so
-   even a lost/evicted DB produces one bounded batch, not a flood
+3. **Drip pacing** — notification-worthy events go into a queue, and each run posts
+   at most ONE, so consecutive posts are always ≥ `send_interval_seconds` (30 min)
+   apart — never a burst
+4. **Rolling daily cap** — `max_per_day` (15), counted from the DB, so even a
+   lost/evicted DB produces one bounded day, not a flood
 5. **Repeat-title guard** — titles matching anything notified in the last
    `duplicate_title_days` (14) are skipped; catches the same event cross-posted on
    two sources and recurring weekly events that get fresh ids
 6. **Quiet hours** — posts between `quiet_start` and `quiet_end` (23:00–08:00 SGT)
    deliver silently: they appear in the channel without pinging your phone
-7. **Spaced sends** — `send_interval_seconds` (30) puts a gap between messages so a
-   batch trickles in instead of arriving as one burst of buzzes (set 0 to disable)
-8. **Fail-safe sends** — if Telegram errors mid-run, unsent events stay unrecorded
-   and are retried next run instead of being lost or hammered
+7. **Fail-safe sends** — a failed send stays queued and is retried next run
+   instead of being lost or hammered
 
 ## Tuning
 

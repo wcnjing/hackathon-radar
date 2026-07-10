@@ -1,7 +1,6 @@
 import argparse
 import logging
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -16,29 +15,25 @@ from hackathon_radar.store import Store
 log = logging.getLogger("radar")
 
 
-def run(args: argparse.Namespace) -> int:
-    config = load_config()
-    store = Store(db_path())
-    telegram = Telegram()
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
 
-    if not args.dry_run and not telegram.configured:
-        log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — use --dry-run or fill in .env")
-        return 1
 
+def _iso(dt: datetime) -> str:
+    return dt.isoformat(timespec="seconds")
+
+
+def _collect(config: dict, store: Store):
+    """Fetch all sources and score whatever is new. No writes."""
     scope_cfg = config.get("scope", {})
     include_full = scope_cfg.get("include_full", False)
     events = fetch_all(config)
     scoped = [e for e in events if in_scope(e, scope_cfg)]
-    # Drop full / waitlist-only events (kept before dedupe, so one that later
-    # frees up still gets picked up on a subsequent run).
     joinable = [e for e in scoped if include_full or not e.full]
     new = [e for e in joinable if not store.is_seen(e)]
     log.info(
         "fetched %d, in scope %d, joinable %d, new %d",
-        len(events),
-        len(scoped),
-        len(joinable),
-        len(new),
+        len(events), len(scoped), len(joinable), len(new),
     )
 
     try:
@@ -46,93 +41,141 @@ def run(args: argparse.Namespace) -> int:
     except Exception as exc:
         log.info("Anthropic credentials unavailable (%s); keyword scoring only", exc)
         client = None
-
-    # Score first (cheap, batched); enrichment — one page-fetching Claude call per
-    # event — is deferred until we know which events actually get posted.
     scores = score_events(new, config, client)
+    return new, scores, client
+
+
+def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
+    """Rank new events and pick the ones worth posting; records the rest."""
     min_score = config.get("interests", {}).get("min_score", 6)
     notify_cfg = config.get("notify", {})
-    max_notify = args.max_notify or notify_cfg.get("max_per_run", 10)
-
-    # Guardrail: rolling 24h cap across runs, so even a lost dedupe DB can't flood.
-    day_ago = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(timespec="seconds")
-    sent_today = store.notified_count_since(day_ago)
-    budget = max(0, notify_cfg.get("max_per_day", 15) - sent_today)
-    if budget < max_notify:
-        log.info("daily cap: %d sent in last 24h, budget now %d", sent_today, budget)
-        max_notify = budget
-
-    # Guardrail: skip anything whose title matches a recent notification —
-    # catches cross-source duplicates and recurring events with fresh ids.
     dupe_days = notify_cfg.get("duplicate_title_days", 14)
-    dupe_cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=dupe_days)
-    ).isoformat(timespec="seconds")
+    dupe_cutoff = _iso(_now() - timedelta(days=dupe_days))
     recent_titles = {normalize_title(t) for t in store.notified_titles_since(dupe_cutoff)}
 
-    # Guardrail: deliver silently during quiet hours (no phone ping overnight).
-    local_hour = datetime.now(
-        ZoneInfo(notify_cfg.get("timezone", "Asia/Singapore"))
-    ).hour
-    silent = is_quiet_hour(
-        local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
-    )
-
-    # First pass: pick the events that clear every gate; record the rest now.
-    # Dry runs must not mark events as seen, or the first real run would
-    # silently skip everything already previewed.
-    ranked = sorted(new, key=lambda e: scores[e.key][0], reverse=True)
-    to_notify = []
-    for event in ranked:
+    selected = []
+    for event in sorted(new, key=lambda e: scores[e.key][0], reverse=True):
         score, reason = scores[event.key]
         norm_title = normalize_title(event.title)
         if norm_title and norm_title in recent_titles:
             log.info("skip (duplicate title): %s", event.title)
-            if not args.dry_run:
+            if not dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
         if score < min_score:
             log.info("skip (score %.0f < %d): %s", score, min_score, event.title)
-            if not args.dry_run:
+            if not dry_run:
                 store.record(event, score, reason)
             continue
-        if len(to_notify) >= max_notify:
+        if len(selected) >= cap:
             log.info("skip (over cap): %s", event.title)
-            if not args.dry_run:
+            if not dry_run:
                 store.record(event, score, reason)
             continue
         recent_titles.add(norm_title)
-        to_notify.append(event)
+        selected.append(event)
+    return selected
 
-    # Only now spend on enrichment — one page-fetching Claude call per event —
-    # and only for the handful actually being posted.
+
+def _ingest(config: dict, store: Store) -> None:
+    """Fetch, score, enrich, and queue notification-worthy events."""
+    new, scores, client = _collect(config, store)
+    # The daily cap bounds how much one ingest may queue; anything beyond it
+    # is recorded as seen (same policy as the old per-run cap).
+    cap = config.get("notify", {}).get("max_per_day", 15)
+    selected = _select(new, scores, store, config, cap, dry_run=False)
+
     if config.get("enrich", {}).get("enabled", True):
-        enrich_events(to_notify, config, client)
-
-    # Second pass: send, spacing messages out so a batch doesn't arrive as a
-    # single burst of phone buzzes.
-    interval = notify_cfg.get("send_interval_seconds", 30)
-    for i, event in enumerate(to_notify):
+        enrich_events(selected, config, client)
+    for event in selected:
         score, reason = scores[event.key]
-        message = format_message(event)
-        if args.dry_run:
-            print(f"\n--- would notify ({score:.0f}/10) ---\n{message}")
-        else:
-            try:
-                telegram.send(message, silent=silent)
-            except TelegramError as exc:
-                # Not recorded as seen — it will be retried next run.
-                log.error("send failed, will retry next run: %s", exc)
-                store.close()
-                return 1
-            store.record(event, score, reason)
-            store.mark_notified(event)
-            if interval > 0 and i < len(to_notify) - 1:
-                time.sleep(interval)
+        store.queue_event(event, score, reason)
+    store.set_meta("last_fetch_at", _iso(_now()))
+    log.info("queued %d event(s); queue depth now %d", len(selected), store.queue_depth())
 
-    log.info("notified %d event(s)%s", len(to_notify), " (dry run)" if args.dry_run else "")
-    store.close()
+
+def _drain(config: dict, store: Store, telegram: Telegram) -> int:
+    """Post at most one queued event, respecting pacing and the daily cap.
+    Returns -1 on send failure, else the number of messages sent."""
+    notify_cfg = config.get("notify", {})
+
+    interval = notify_cfg.get("send_interval_seconds", 1800)
+    last_send = store.get_meta("last_send_at")
+    if last_send:
+        elapsed = (_now() - datetime.fromisoformat(last_send)).total_seconds()
+        if elapsed < interval:
+            log.info("drip gap not elapsed (%.0fs of %ds); queue depth %d",
+                     elapsed, interval, store.queue_depth())
+            return 0
+
+    day_ago = _iso(_now() - timedelta(days=1))
+    if store.notified_count_since(day_ago) >= notify_cfg.get("max_per_day", 15):
+        log.info("daily cap reached; queue depth %d", store.queue_depth())
+        return 0
+
+    item = store.pop_queued()
+    if item is None:
+        return 0
+    event, score, reason = item
+
+    local_hour = datetime.now(ZoneInfo(notify_cfg.get("timezone", "Asia/Singapore"))).hour
+    silent = is_quiet_hour(
+        local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
+    )
+    try:
+        telegram.send(format_message(event), silent=silent)
+    except TelegramError as exc:
+        # Still queued (not marked notified) — retried next run.
+        log.error("send failed, will retry next run: %s", exc)
+        return -1
+    store.mark_notified(event)
+    store.set_meta("last_send_at", _iso(_now()))
+    log.info("sent (%.0f/10): %s — queue depth now %d", score, event.title, store.queue_depth())
+    return 1
+
+
+def _preview(args: argparse.Namespace, config: dict, store: Store) -> int:
+    """Dry run: fetch + score + show what would be queued. Writes nothing."""
+    new, scores, client = _collect(config, store)
+    cap = args.max_notify or config.get("notify", {}).get("max_per_run", 10)
+    selected = _select(new, scores, store, config, cap, dry_run=True)
+    if config.get("enrich", {}).get("enabled", True):
+        enrich_events(selected, config, client)
+    for event in selected:
+        score, _ = scores[event.key]
+        print(f"\n--- would queue ({score:.0f}/10) ---\n{format_message(event)}")
+    log.info("%d event(s) would be queued (dry run)", len(selected))
     return 0
+
+
+def run(args: argparse.Namespace) -> int:
+    config = load_config()
+    store = Store(db_path())
+
+    if args.dry_run:
+        result = _preview(args, config, store)
+        store.close()
+        return result
+
+    telegram = Telegram()
+    if not telegram.configured:
+        log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set — use --dry-run or fill in .env")
+        return 1
+
+    # Sources are fetched every fetch_every_hours; in-between runs only drip
+    # the queue, keeping each run short and the channel calm.
+    fetch_every = config.get("notify", {}).get("fetch_every_hours", 6)
+    last_fetch = store.get_meta("last_fetch_at")
+    fetch_due = True
+    if last_fetch:
+        elapsed = (_now() - datetime.fromisoformat(last_fetch)).total_seconds()
+        fetch_due = elapsed >= fetch_every * 3600 - 600  # 10 min scheduling tolerance
+    if fetch_due:
+        _ingest(config, store)
+
+    sent = _drain(config, store, telegram)
+    store.close()
+    return 1 if sent < 0 else 0
 
 
 def get_chat_id(args: argparse.Namespace) -> int:
@@ -182,9 +225,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="radar", description="Hackathon & event notifier")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_run = sub.add_parser("run", help="fetch, score, and notify new events")
-    p_run.add_argument("--dry-run", action="store_true", help="print instead of sending to Telegram")
-    p_run.add_argument("--max-notify", type=int, default=None, help="cap notifications this run")
+    p_run = sub.add_parser("run", help="fetch/queue when due, then drip one queued event")
+    p_run.add_argument("--dry-run", action="store_true", help="print instead of queueing/sending")
+    p_run.add_argument("--max-notify", type=int, default=None, help="preview cap for --dry-run")
     p_run.set_defaults(func=run)
 
     p_chat = sub.add_parser("get-chat-id", help="discover your channel's chat id")

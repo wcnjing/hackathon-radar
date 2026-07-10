@@ -85,10 +85,14 @@ max_emails_per_run = 20
 assume_country = "SG"
 
 [notify]
-max_per_run = 10           # cap per run so a single run can't flood the channel
-max_per_day = 15           # rolling 24h cap across runs (guards against DB loss)
-duplicate_title_days = 14  # skip events whose title matches a recent notification
-quiet_start = 23           # deliver silently (no ping) from 23:00...
-quiet_end = 8              # ...to 08:00; set both equal to disable
+# Posting is drip-fed from a queue: sources are fetched every fetch_every_hours,
+# notification-worthy events are queued, and each (frequent, short) run posts at
+# most ONE queued event — so posts are always >= send_interval_seconds apart.
+send_interval_seconds = 1800  # min gap between consecutive channel posts (30 min)
+fetch_every_hours = 6         # how often sources are fetched and the queue refilled
+max_per_run = 10              # preview cap for --dry-run
+max_per_day = 15              # rolling 24h cap (also bounds how much one ingest queues)
+duplicate_title_days = 14     # skip events whose title matches a recent notification
+quiet_start = 23              # deliver silently (no ping) from 23:00...
+quiet_end = 8                 # ...to 08:00; set both equal to disable
 timezone = "Asia/Singapore"
-send_interval_seconds = 30 # gap between messages so a batch isn't one burst; 0 = off
