@@ -74,6 +74,16 @@ pages = [
 # Street, Correlation One) get per-event countries inferred during extraction.
 assume_country = "SG"
 
+[sources.email]
+# Dedicated inbox subscribed to event newsletters (EMAIL_ADDRESS /
+# EMAIL_APP_PASSWORD in .env and GitHub secrets). Each message is processed
+# once; Claude extracts any announced events from the body.
+enabled = true
+imap_host = "imap.gmail.com"
+folder = "INBOX"
+max_emails_per_run = 20
+assume_country = "SG"
+
 [notify]
 max_per_run = 10           # cap per run so a single run can't flood the channel
 max_per_day = 15           # rolling 24h cap across runs (guards against DB loss)

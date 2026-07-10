@@ -1,7 +1,7 @@
 import logging
 
 from hackathon_radar.models import Event
-from hackathon_radar.sources import devpost, luma, mlh, watchlist
+from hackathon_radar.sources import devpost, email_source, luma, mlh, watchlist
 
 log = logging.getLogger(__name__)
 
@@ -10,6 +10,7 @@ FETCHERS = {
     "mlh": mlh.fetch,
     "luma": luma.fetch,
     "watchlist": watchlist.fetch,
+    "email": email_source.fetch,
 }
 
 
