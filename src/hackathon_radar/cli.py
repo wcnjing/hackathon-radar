@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -115,6 +116,7 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
 
     item = store.pop_queued()
     if item is None:
+        log.info("queue empty; nothing to send")
         return 0
     event, score, reason = item
 
@@ -170,6 +172,10 @@ def run(args: argparse.Namespace) -> int:
     if last_fetch:
         elapsed = (_now() - datetime.fromisoformat(last_fetch)).total_seconds()
         fetch_due = elapsed >= fetch_every * 3600 - 600  # 10 min scheduling tolerance
+        if os.environ.get("RADAR_FORCE_FETCH", "").lower() in ("1", "true"):
+            fetch_due = True
+        if not fetch_due:
+            log.info("fetch not due (%.0f min since last); drain-only run", elapsed / 60)
     if fetch_due:
         _ingest(config, store)
 

@@ -5,7 +5,12 @@ on:
     # Every 30 minutes: each run posts at most ONE queued event (30-min drip
     # pacing); sources are only re-fetched every 6 hours (tracked in the DB).
     - cron: "7,37 * * * *"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      force_fetch:
+        description: "Fetch sources now even if the 6h cadence isn't due"
+        type: boolean
+        default: false
 
 # Never run two radar runs at once — they'd both restore the same seen-events
 # DB and double-send. A run that triggers while one is in progress waits for it
@@ -43,6 +48,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EMAIL_ADDRESS: ${{ secrets.EMAIL_ADDRESS }}
           EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
+          RADAR_FORCE_FETCH: ${{ inputs.force_fetch && '1' || '' }}
         run: uv run radar run
 
       # Re-enabling ourselves resets GitHub's 60-day inactivity timer, so the
