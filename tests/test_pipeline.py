@@ -303,6 +303,34 @@ class TestFullEvents:
         assert "Full Event" in capsys.readouterr().out
 
 
+class TestKindThreshold:
+    def test_networking_needs_higher_score(self, tmp_path, monkeypatch, capsys):
+        """min_score_by_kind: a 7/10 hackathon posts, a 7/10 meetup doesn't."""
+        from hackathon_radar import cli
+
+        hack = make_event(external_id="1", title="Decent Hackathon", kind="hackathon")
+        meetup = make_event(external_id="2", title="Decent Meetup", kind="networking")
+        great_meetup = make_event(external_id="3", title="Anthropic Night", kind="networking")
+        config = {
+            "interests": {"min_score": 6, "min_score_by_kind": {"networking": 8}},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 9},
+            "enrich": {"enabled": False},
+        }
+        scores = {hack.key: (7.0, "x"), meetup.key: (7.0, "x"), great_meetup.key: (9.0, "x")}
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [hack, meetup, great_meetup])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(cli, "score_events", lambda evs, cfg, client=None: scores)
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        out = capsys.readouterr().out
+        assert "Decent Hackathon" in out
+        assert "Anthropic Night" in out
+        assert "Decent Meetup" not in out
+
+
 class TestEnrichmentScope:
     def test_enrichment_only_touches_notified_events(self, tmp_path, monkeypatch, capsys):
         """Cost guard: enrichment (paid per-event page calls) must run only for

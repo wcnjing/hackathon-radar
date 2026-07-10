@@ -6,13 +6,18 @@ profile = """
 This channel serves tech undergraduate students in Singapore who want to level up:
 CS/engineering students, self-taught devs, and student builders.
 
-Highest priority:
-- Hackathons and buildathons, especially AI/ML/LLM ones and events by model providers
-  (Anthropic, OpenAI, Google, AWS) — student-friendly or open-entry preferred
-- Tech networking where students can learn and meet people: dev/AI meetups, builder
-  nights, tech talks, demo days, founder and startup events
-- Programs that upgrade students: accelerators, fellowships, bootcamps, and mentorship
+Highest priority — ACTIONABLE events where students build, compete, or apply:
+- Hackathons, buildathons, datathons, and competitions — especially AI/ML/LLM ones
+  and events by model providers (Anthropic, OpenAI, Google, AWS); student-friendly
+  or open-entry preferred
+- Programs that upgrade students: accelerators, fellowships, bootcamps, mentorship
   programs open to undergrads
+- Hands-on workshops where you leave having built something
+
+Low priority — networking sessions, talks, panels, mixers, demo days: score these
+5 or below unless truly exceptional (rare direct access to a major company or
+famous builders, e.g. an Anthropic/OpenAI community night). A generic meetup,
+founders' breakfast, or tech talk is NOT worth a notification.
 
 Not a fit: non-tech lifestyle events (fitness, arts, wellness), marketing or sales
 events, pure crypto/web3-only events, senior-executive conferences, and anything
@@ -27,6 +32,8 @@ keywords = [
 ]
 # Events scoring below this (0-10) are recorded but not notified.
 min_score = 6
+# Per-kind overrides: networking/talks must be exceptional to earn a post.
+min_score_by_kind = { networking = 8 }
 
 [scope]
 mode = "sg_plus_online"   # "sg_plus_online" | "sg_only" | "global"

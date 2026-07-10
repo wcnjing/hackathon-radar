@@ -48,7 +48,10 @@ def _collect(config: dict, store: Store):
 
 def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     """Rank new events and pick the ones worth posting; records the rest."""
-    min_score = config.get("interests", {}).get("min_score", 6)
+    interests = config.get("interests", {})
+    min_score = interests.get("min_score", 6)
+    # e.g. { networking = 8 }: talks/mixers must be exceptional to earn a post.
+    min_by_kind = interests.get("min_score_by_kind", {})
     notify_cfg = config.get("notify", {})
     dupe_days = notify_cfg.get("duplicate_title_days", 14)
     dupe_cutoff = _iso(_now() - timedelta(days=dupe_days))
@@ -63,8 +66,9 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
             if not dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
-        if score < min_score:
-            log.info("skip (score %.0f < %d): %s", score, min_score, event.title)
+        threshold = min_by_kind.get(event.kind, min_score)
+        if score < threshold:
+            log.info("skip (score %.0f < %d for %s): %s", score, threshold, event.kind, event.title)
             if not dry_run:
                 store.record(event, score, reason)
             continue
