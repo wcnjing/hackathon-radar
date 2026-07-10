@@ -61,9 +61,11 @@ limit = 50
 # clubs, uni departments. Any URL works — Claude extracts events from the page
 # text, and only re-reads a page when its content changes (near-zero idle cost).
 # Note: JS-only pages (content invisible without a browser) can't be watched.
+# Tip: public Telegram channels work via their t.me/s/<name> preview page.
 enabled = true
 pages = [
     "https://www.nushackers.org/",
+    "https://t.me/s/ntuoss",       # NTU Open Source Society announcements
 ]
 assume_country = "SG"     # events from these pages count as local unless stated
 
