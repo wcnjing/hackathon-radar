@@ -2,28 +2,47 @@ from hackathon_radar.sources import watchlist
 from hackathon_radar.sources.watchlist import PageEvent, to_event
 
 
+def page_event(**overrides) -> PageEvent:
+    defaults = dict(
+        title="Some Event", url=None, dates_text=None, location=None,
+        country_code=None, is_online=False,
+    )
+    defaults.update(overrides)
+    return PageEvent(**defaults)
+
+
 class TestToEvent:
     def test_resolves_relative_url_and_assumes_country(self):
-        pe = PageEvent(title="Hack&Roll 2027", url="/hacknroll", dates_text="Jan 16-17", location=None)
+        pe = page_event(title="Hack&Roll 2027", url="/hacknroll", dates_text="Jan 16-17")
         ev = to_event(pe, "https://www.nushackers.org/", "SG")
         assert ev.url == "https://www.nushackers.org/hacknroll"
         assert ev.country == "SG"
         assert ev.source == "watchlist"
         assert ev.dates_text == "Jan 16-17"
 
+    def test_stated_country_beats_assumed(self):
+        # Global pages (Jane Street etc.) list foreign events; those must not
+        # be stamped SG or they'd wrongly pass the scope filter.
+        pe = page_event(title="Estimathon NYC", location="New York", country_code="US")
+        ev = to_event(pe, "https://www.janestreet.com/join-jane-street/events/", "SG")
+        assert ev.country == "US"
+
+    def test_online_flag_carries(self):
+        ev = to_event(page_event(title="Virtual Trading Comp", is_online=True), "https://x.org/", "SG")
+        assert ev.online is True
+
     def test_event_without_link_falls_back_to_page(self):
-        pe = PageEvent(title="Friday Hacks #287", url=None, dates_text=None, location="COM3, NUS")
+        pe = page_event(title="Friday Hacks #287", location="COM3, NUS")
         ev = to_event(pe, "https://www.nushackers.org/", "SG")
         assert ev.url == "https://www.nushackers.org/"
 
     def test_stable_id_from_page_and_title(self):
-        pe = PageEvent(title="Friday Hacks  #287!", url=None, dates_text=None, location=None)
-        a = to_event(pe, "https://x.org/", "SG")
-        b = to_event(PageEvent(title="friday hacks #287", url=None, dates_text=None, location=None), "https://x.org/", "SG")
+        a = to_event(page_event(title="Friday Hacks  #287!"), "https://x.org/", "SG")
+        b = to_event(page_event(title="friday hacks #287"), "https://x.org/", "SG")
         assert a.external_id == b.external_id  # survives punctuation/case reposts
 
     def test_blank_title_dropped(self):
-        assert to_event(PageEvent(title="  ", url=None, dates_text=None, location=None), "https://x.org/", "SG") is None
+        assert to_event(page_event(title="  "), "https://x.org/", "SG") is None
 
 
 class TestHashGate:
@@ -48,8 +67,7 @@ class TestHashGate:
         monkeypatch.setattr(
             watchlist,
             "_extract",
-            lambda client, model, text, page_url: calls.append(page_url)
-            or [PageEvent(title="Some Event", url=None, dates_text=None, location=None)],
+            lambda client, model, text, page_url: calls.append(page_url) or [page_event()],
         )
         return calls
 

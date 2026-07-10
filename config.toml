@@ -65,9 +65,14 @@ limit = 50
 enabled = true
 pages = [
     "https://www.nushackers.org/",
-    "https://t.me/s/ntuoss",       # NTU Open Source Society announcements
+    "https://t.me/s/ntuoss",                          # NTU OSS announcements
+    "https://www.janestreet.com/join-jane-street/events/",
+    "https://readytradergo.optiver.com/",             # fires when a new edition launches
+    "https://www.correlation-one.com/",               # Citadel datathons etc.
 ]
-assume_country = "SG"     # events from these pages count as local unless stated
+# Fallback when a page doesn't state an event's country; global pages (Jane
+# Street, Correlation One) get per-event countries inferred during extraction.
+assume_country = "SG"
 
 [notify]
 max_per_run = 10           # cap per run so a single run can't flood the channel

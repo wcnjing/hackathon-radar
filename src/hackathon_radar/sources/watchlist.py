@@ -36,7 +36,10 @@ Organizer sites often go stale: when an event's date has no year, assume the
 current year — if that makes it past, skip it even if the page says "upcoming".
 
 For each event: title; url (link to the event, relative is fine, null if none);
-dates_text (dates/time as written, null if none); location (null if not stated)."""
+dates_text (dates/time as written, null if none); location (null if not stated);
+country_code (two-letter code when the location or page context makes it clear,
+e.g. a university room on an SG campus -> "SG", New York -> "US"; null if truly
+unclear); is_online (true for virtual/remote events)."""
 
 
 class PageEvent(BaseModel):
@@ -44,6 +47,8 @@ class PageEvent(BaseModel):
     url: str | None
     dates_text: str | None
     location: str | None
+    country_code: str | None
+    is_online: bool
 
 
 class PageEvents(BaseModel):
@@ -75,9 +80,11 @@ def to_event(pe: PageEvent, page_url: str, assume_country: str) -> Event | None:
         url=url,
         dates_text=pe.dates_text or "",
         location=pe.location or "",
-        # Watched pages are added because they're local organizers; without an
-        # explicit location the scope filter would wrongly drop their events.
-        country=assume_country or None,
+        online=pe.is_online,
+        # Trust the per-event country when the page states one (global pages
+        # like Jane Street list events worldwide); fall back to the configured
+        # country so local organizers' events aren't dropped by the scope filter.
+        country=pe.country_code or assume_country or None,
     )
 
 
