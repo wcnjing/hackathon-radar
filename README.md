@@ -11,6 +11,8 @@ discover feed (`lu.ma/singapore`) for networking events and meetups, plus a
 **watchlist** of arbitrary organizer pages (school clubs, company hackathon sites) —
 add any URL to `sources.watchlist.pages` and Claude extracts events whenever the
 page's content changes.
+Cards link to the most informative public event page available, not the deepest
+signup form; the goal is to help a student decide before they commit.
 **Scope:** Singapore in-person + online/global events (configurable in `config.toml`).
 **Scoring:** `claude-haiku-4-5` rates each event 0–10 against the interest profile in
 `config.toml` — scores and reasons stay in the database (backend-only); the channel

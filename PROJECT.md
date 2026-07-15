@@ -63,16 +63,20 @@ new events; nothing full/closed/ended; networking posts only when exceptional
 (score ≥8 vs ≥6 for hackathons); overnight posts silent; a lost cache bounded
 to one re-notified day, never a flood.
 
+**Trust checklist:** a card should never point nowhere, point at a dead page,
+point at a signup/login wall when a public detail page exists, advertise a
+closed/full event, or make a beginner-hostile claim the source does not support.
+
 ## What's implemented
 
 **Sources (5 pipelines):**
 | Source | Mechanism |
 |---|---|
-| Devpost | Unofficial JSON API, open/upcoming only, `/register` links, invite-only flagged |
+| Devpost | Unofficial JSON API, open/upcoming only, public overview links, invite-only flagged |
 | MLH | Season pages (schema.org microdata), current + next season |
 | Luma | SG discover feed via embedded `__NEXT_DATA__` + discover API; full/waitlist events dropped |
-| Watchlist | Arbitrary organizer URLs (incl. `t.me/s/<channel>` for public Telegram channels); Claude extracts events only when a page's content-hash changes |
-| Email | Dedicated Gmail inbox over read-only IMAP with UID tracking; Claude extracts events from newsletter bodies **and attachments** (.ics parsed, PDFs via pypdf, poster images via Claude vision); hyperlinks preserved as `text (url)` |
+| Watchlist | Arbitrary organizer URLs (incl. `t.me/s/<channel>` for public Telegram channels); Claude extracts events only when a page's content-hash changes and is prompted to prefer public detail links over signup walls |
+| Email | Dedicated Gmail inbox over read-only IMAP with UID tracking; Claude extracts events from newsletter bodies **and attachments** (.ics parsed, PDFs via pypdf, poster images via Claude vision); hyperlinks preserved as `text (url)` and public detail links are preferred over forms/tracking links when available |
 
 **Pipeline:** fetch → scope filter (SG + online; per-event country inference
 for global pages) → joinable filter → seen-DB dedupe → Claude scoring
@@ -126,7 +130,9 @@ action, not routine.
 
 - **Dedupe:** per-source ids; cross-source and recurring events (fresh Luma ids
   weekly) via normalized-title guard; unicode titles normalize to empty → guard
-  skipped rather than everything colliding
+  skipped rather than everything colliding; the guard checks both recently
+  notified and still-queued titles, so a drip backlog cannot post the same
+  event from two sources
 - **Sources:** Devpost prize HTML stripped; invite-only kept but flagged;
   submission window labeled so a past start date doesn't read as "over"; MLH
   season rollover (fetch both years); Luma full/waitlist/sold-out dropped
@@ -152,8 +158,6 @@ action, not routine.
 - **Dry-run mutates source state** (watchlist hashes, email UID) — see caveat above
 - **actions/cache saves only on job success** — a failed run rolls back the
   DB: re-spend on the next run, and a sent-but-rolled-back event would re-post
-- **Repeat-title guard doesn't see still-queued titles** — same event from two
-  sources within one drip backlog can post twice
 - **Queued payloads embed the Event schema** — renaming/removing an Event field
   while events sit queued would crash drain until the cache is cleared
 - **No queue staleness check** — under sustained cap pressure an event could
@@ -176,3 +180,5 @@ action, not routine.
 - **Networking threshold 8 vs 6** — actionable > attendable, enforced in code
 - **Internships excluded** — dated-event-only policy; sibling channel if ever
 - **Linkless events skipped** — a card pointing nowhere burns trust
+- **Most informative public link wins** — the card's job is to get a student to
+  a decision, not to send them straight into a signup wall

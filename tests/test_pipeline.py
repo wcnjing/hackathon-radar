@@ -101,6 +101,18 @@ class TestStore:
         assert store.pop_queued()[0].external_id == "low"
         store.close()
 
+    def test_queued_titles_lists_unsent_events(self, tmp_path):
+        store = Store(tmp_path / "test.db")
+        first = make_event(external_id="first", title="First")
+        second = make_event(external_id="second", title="Second")
+        store.queue_event(first, 8.0, "ok")
+        store.queue_event(second, 7.0, "ok")
+        assert store.queued_titles() == ["First", "Second"]
+
+        store.mark_notified(first)
+        assert store.queued_titles() == ["Second"]
+        store.close()
+
     def test_migration_from_pre_queue_schema(self, tmp_path):
         import sqlite3
 
@@ -193,12 +205,13 @@ class TestFormatMessage:
         assert "💡" not in msg
         assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
         assert 'href="https://example.com"' in msg
-        assert '<a href="https://example.com/register">Register here</a>' in msg
+        assert "Register here" not in msg
+        assert "https://example.com/register" not in msg
 
     def test_minimal_event(self):
         msg = format_message(make_event())
         assert "Some Hackathon" in msg
-        assert "Register here" not in msg  # no register link when none is known
+        assert "Register here" not in msg
         assert "🔒" not in msg
         assert "👥" not in msg
         assert "blockquote" not in msg
@@ -423,6 +436,37 @@ class TestDripQueue:
         store = Store(tmp_path / "radar.db")
         assert store.queue_depth() == 1  # still queued — retried next run
         assert store.notified_count_since("2000-01-01T00:00:00+00:00") == 0
+        store.close()
+
+    def test_queued_title_blocks_later_duplicate(self, tmp_path, monkeypatch):
+        sent = []
+
+        class FakeTelegram:
+            configured = True
+
+            def send(self, text, silent=False):
+                sent.append(text)
+
+        first = make_event(source="devpost", external_id="1", title="AI Agents Jam!")
+        duplicate = make_event(source="luma", external_id="2", title="ai agents jam")
+        batches = iter([[first], [duplicate]])
+        cli = self._wire(monkeypatch, tmp_path, [], FakeTelegram())
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: next(batches))
+        args = argparse.Namespace(dry_run=False, max_notify=None)
+
+        assert cli.run(args) == 0
+        store = Store(tmp_path / "radar.db")
+        assert store.queue_depth() == 0  # first event was queued, then dripped
+        store.set_meta("last_fetch_at", "2000-01-01T00:00:00+00:00")
+        store.set_meta("last_send_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        store.queue_event(make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x")
+        store.close()
+
+        assert cli.run(args) == 0
+        store = Store(tmp_path / "radar.db")
+        assert store.queue_depth() == 1
+        assert store.is_seen(duplicate)
+        assert store.queued_titles() == ["AI Agents Jam"]
         store.close()
 
 

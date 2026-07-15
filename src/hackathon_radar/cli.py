@@ -55,7 +55,10 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     notify_cfg = config.get("notify", {})
     dupe_days = notify_cfg.get("duplicate_title_days", 14)
     dupe_cutoff = _iso(_now() - timedelta(days=dupe_days))
-    recent_titles = {normalize_title(t) for t in store.notified_titles_since(dupe_cutoff)}
+    recent_titles = {
+        normalize_title(t)
+        for t in [*store.notified_titles_since(dupe_cutoff), *store.queued_titles()]
+    }
 
     selected = []
     for event in sorted(new, key=lambda e: scores[e.key][0], reverse=True):

@@ -32,10 +32,15 @@ upcoming or currently open for registration. Skip past events, and skip anything
 that is clearly navigation, a sponsor mention, or not an actual event. If the page
 lists no upcoming events, return an empty list.
 
+For links, prefer the most informative public event page where a newcomer can
+read details and decide. Avoid direct signup/login walls, Google Forms, "apply
+now" pages, calendar-add links, and tracking redirects when a public detail page
+is available.
+
 Organizer sites often go stale: when an event's date has no year, assume the
 current year — if that makes it past, skip it even if the page says "upcoming".
 
-For each event: title; url (link to the event, relative is fine, null if none);
+For each event: title; url (best public detail link, relative is fine, null if none);
 dates_text (dates/time as written, null if none); location (null if not stated);
 country_code (two-letter code when the location or page context makes it clear,
 e.g. a university room on an SG campus -> "SG", New York -> "US"; null if truly

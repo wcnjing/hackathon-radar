@@ -22,7 +22,7 @@ def test_devpost_parse():
     # labelled so a past start date doesn't read as "already over"
     assert first.dates_text.startswith("submissions ")
     assert first.time_left  # e.g. "about 1 month left"
-    assert first.register_url == first.url.rstrip("/") + "/register"
+    assert first.register_url is None  # card links to the public overview, not the signup wall
 
 
 def test_devpost_skips_closed_and_flags_invite_only():

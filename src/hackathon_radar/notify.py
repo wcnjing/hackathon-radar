@@ -70,8 +70,6 @@ def format_message(event: Event) -> str:
         # Collapsed by default in Telegram; tap to expand.
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
-    if event.register_url:
-        lines.append(f'📝 <a href="{e(event.register_url)}">Register here</a>')
     return "\n".join(lines)
 
 

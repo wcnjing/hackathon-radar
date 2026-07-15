@@ -17,7 +17,7 @@ class Event:
     full: bool = False  # registration closed/waitlist-only where the source says so
     tags: list[str] = field(default_factory=list)
     prize: str | None = None
-    register_url: str | None = None  # direct signup link when distinct from url
+    register_url: str | None = None  # source-provided action link; cards prefer public detail url
     invite_only: bool = False
     kind: str = "hackathon"  # "hackathon" | "networking" | "program" (Claude refines)
     level: str | None = None  # "beginner" | "intermediate" | "advanced"; None = unclear

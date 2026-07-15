@@ -84,6 +84,12 @@ class Store:
             "SELECT COUNT(*) FROM events WHERE notified_at IS NULL AND payload IS NOT NULL"
         ).fetchone()[0]
 
+    def queued_titles(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT title FROM events WHERE notified_at IS NULL AND payload IS NOT NULL"
+        ).fetchall()
+        return [r[0] for r in rows if r[0]]
+
     def mark_notified(self, event: Event) -> None:
         self.conn.execute(
             "UPDATE events SET notified_at = ? WHERE source = ? AND external_id = ?",

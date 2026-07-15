@@ -35,10 +35,13 @@ images shown above this message — read those too.
 Extract every tech event (hackathon, competition, workshop, meetup, talk, program)
 the email or its attachments announce that is upcoming or currently open for
 registration. Links appear inline as "text (url)" — attach the event's own url.
+Prefer the most informative public event page where a newcomer can read details
+and decide. Avoid direct signup/login walls, Google Forms, "apply now" pages,
+calendar-add links, and tracking redirects when a public detail page is available.
 Skip past events, job/internship listings that aren't dated events, and marketing
 filler. If the email announces no events, return an empty list.
 
-For each event: title; url (the event's own link from the email, null if none);
+For each event: title; url (the best public detail link from the email, null if none);
 dates_text (dates as written, null if none); location (null if not stated);
 country_code (two-letter code when clear from the text, null otherwise);
 is_online (true for virtual events)."""
