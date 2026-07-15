@@ -1,7 +1,7 @@
 [project]
 name = "hackathon-radar"
 version = "0.1.0"
-description = "Watches Devpost and MLH for hackathons you'd care about and posts them to a Telegram channel"
+description = "Auto-curates hackathons and tech events for SG tech students from Devpost, MLH, Luma, watched pages, and a newsletter inbox; drip-posts to Telegram"
 readme = "README.md"
 authors = [
     { name = "wcnjing", email = "wenjinx2005@gmail.com" }

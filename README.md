@@ -4,6 +4,8 @@ Watches hackathons, tech meetups, and networking events, scores each new one aga
 your interests with Claude, and posts matches to a Telegram channel — so your phone
 buzzes when something worth joining appears.
 
+*(Vision, roadmap, and engineering record: [PROJECT.md](PROJECT.md).)*
+
 **Sources:** Devpost (JSON API), MLH season pages (schema.org microdata), Luma city
 discover feed (`lu.ma/singapore`) for networking events and meetups, plus a
 **watchlist** of arbitrary organizer pages (school clubs, company hackathon sites) —
@@ -65,23 +67,28 @@ means duplicate notifications.
 
 ### Option A (recommended): GitHub Actions — runs even when your Mac is off
 
-The workflow in `.github/workflows/radar.yml` runs twice daily on GitHub's servers.
-One-time setup after pushing the repo — add the three secrets (each command prompts
-you to paste the value, so nothing lands in shell history):
+The workflow in `.github/workflows/radar.yml` fires every 30 minutes on GitHub's
+servers (drip pacing; sources fetched every 6h). One-time setup after pushing the
+repo — add the five secrets (each command prompts you to paste the value, so
+nothing lands in shell history):
 
 ```sh
 gh secret set TELEGRAM_BOT_TOKEN
 gh secret set TELEGRAM_CHAT_ID
 gh secret set ANTHROPIC_API_KEY
+gh secret set EMAIL_ADDRESS        # feed-inbox source (optional but recommended)
+gh secret set EMAIL_APP_PASSWORD
 
-gh workflow run radar.yml          # trigger a test run now
-gh run watch                       # watch it
+gh workflow run radar.yml                       # trigger a run now
+gh workflow run radar.yml -f force_fetch=true   # ...and sweep sources immediately
+gh run watch                                    # watch it
 ```
 
 The seen-events DB is persisted between runs via the Actions cache. Quirks: scheduled
 runs can start a few minutes late, and GitHub pauses schedules on repos with no
-commits for 60 days (any commit re-enables). If the cache is ever evicted, the next
-run re-notifies up to `max_per_run` events once.
+commits for 60 days (the workflow's keepalive step counters this). If the cache is
+ever evicted, the next ingest re-queues up to `max_per_day` previously-seen events,
+which then drip out normally.
 
 ### Option B: launchd — local, only while the Mac is awake
 
