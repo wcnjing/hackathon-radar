@@ -6,12 +6,15 @@ Credentials come from EMAIL_ADDRESS / EMAIL_APP_PASSWORD; the password is a
 Gmail app password scoped to this one inbox.
 """
 
+import base64
 import email
 import email.policy
 import imaplib
+import io
 import json
 import logging
 import os
+import re
 from datetime import date
 
 from hackathon_radar.config import PROJECT_ROOT
@@ -25,12 +28,15 @@ log = logging.getLogger(__name__)
 STATE_PATH = PROJECT_ROOT / "data" / "email_state.json"
 
 PROMPT = """Today is {today}. Below is an email sent to an inbox that is subscribed
-to tech-event newsletters (subject: {subject!r}, from: {sender!r}).
+to tech-event newsletters (subject: {subject!r}, from: {sender!r}). It may include
+attachment content: calendar-invite fields, extracted PDF text, or attached poster
+images shown above this message — read those too.
 
 Extract every tech event (hackathon, competition, workshop, meetup, talk, program)
-the email announces that is upcoming or currently open for registration. Skip past
-events, job/internship listings that aren't dated events, and marketing filler.
-If the email announces no events, return an empty list.
+the email or its attachments announce that is upcoming or currently open for
+registration. Links appear inline as "text (url)" — attach the event's own url.
+Skip past events, job/internship listings that aren't dated events, and marketing
+filler. If the email announces no events, return an empty list.
 
 For each event: title; url (the event's own link from the email, null if none);
 dates_text (dates as written, null if none); location (null if not stated);
@@ -51,19 +57,88 @@ def _save_state(state: dict) -> None:
 
 
 def body_text(msg: email.message.EmailMessage, limit: int = 6_000) -> str:
-    plain = msg.get_body(preferencelist=("plain",))
-    if plain is not None:
+    plain = ""
+    plain_part = msg.get_body(preferencelist=("plain",))
+    if plain_part is not None:
         try:
-            return " ".join(plain.get_content().split())[:limit]
-        except Exception:  # undecodable part; fall through to html
+            plain = " ".join(plain_part.get_content().split())[:limit]
+        except Exception:
             pass
+    html = ""
     html_part = msg.get_body(preferencelist=("html",))
     if html_part is not None:
         try:
-            return _page_text(html_part.get_content(), limit)
+            html = _page_text(html_part.get_content(), limit)
         except Exception:
             pass
-    return ""
+    # Prefer the plain part, but not when it's empty or link-free while the
+    # HTML part carries the URLs (common with marketing senders) — link-free
+    # text produces events the pipeline must drop as non-actionable.
+    if plain and ("http" in plain or not html):
+        return plain
+    return html or plain
+
+
+MAX_ATTACHMENT_BYTES = 3_000_000
+IMAGE_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+MAX_IMAGES = 2
+MAX_DOCS = 2
+
+
+def _ics_text(raw: str, limit: int = 1_500) -> str:
+    """Flatten the first VEVENT's key fields — structured gold, no AI needed."""
+    unfolded = re.sub(r"\r?\n[ \t]", "", raw)
+    fields = []
+    for key in ("SUMMARY", "DTSTART", "DTEND", "LOCATION", "URL", "DESCRIPTION"):
+        match = re.search(rf"^{key}[^:]*:(.+)$", unfolded, re.M)
+        if match:
+            fields.append(f"{key.title()}: {match.group(1).strip()}")
+    return (f"Calendar invite — {'; '.join(fields)}")[:limit] if fields else ""
+
+
+def _pdf_text(data: bytes, limit: int = 2_000) -> str:
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(data))
+        text = " ".join((page.extract_text() or "") for page in reader.pages[:3])
+        return " ".join(text.split())[:limit]
+    except Exception:
+        return ""
+
+
+def attachment_content(msg: email.message.EmailMessage) -> tuple[str, list[dict]]:
+    """Returns (extra_text, image_blocks) from an email's attachments:
+    .ics and PDF become text; poster images become Claude vision blocks."""
+    texts: list[str] = []
+    images: list[dict] = []
+    for part in msg.iter_attachments():
+        ctype = part.get_content_type()
+        try:
+            payload = part.get_content()
+        except Exception:
+            continue
+        if ctype == "text/calendar" and isinstance(payload, str):
+            if ics := _ics_text(payload):
+                texts.append(ics)
+        elif not isinstance(payload, bytes) or len(payload) > MAX_ATTACHMENT_BYTES:
+            continue
+        elif ctype == "application/pdf" and len(texts) < MAX_DOCS:
+            if pdf := _pdf_text(payload):
+                name = part.get_filename() or "attachment.pdf"
+                texts.append(f"PDF attachment {name!r}: {pdf}")
+        elif ctype in IMAGE_TYPES and len(images) < MAX_IMAGES:
+            images.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": ctype,
+                        "data": base64.b64encode(payload).decode(),
+                    },
+                }
+            )
+    return "\n".join(texts), images
 
 
 def new_uids(uids: list[int], last_seen: int) -> list[int]:
@@ -91,19 +166,16 @@ def to_event(pe: PageEvent, message_id: str, assume_country: str) -> Event | Non
     )
 
 
-def _extract(client, model: str, text: str, subject: str, sender: str) -> list[PageEvent]:
+def _extract(
+    client, model: str, text: str, subject: str, sender: str, images: list[dict] = []
+) -> list[PageEvent]:
+    prompt = PROMPT.format(
+        today=date.today().isoformat(), subject=subject, sender=sender
+    ) + f"\n\n<email_body>\n{text}\n</email_body>"
     response = client.messages.parse(
         model=model,
         max_tokens=2_000,
-        messages=[
-            {
-                "role": "user",
-                "content": PROMPT.format(
-                    today=date.today().isoformat(), subject=subject, sender=sender
-                )
-                + f"\n\n<email_body>\n{text}\n</email_body>",
-            }
-        ],
+        messages=[{"role": "user", "content": [*images, {"type": "text", "text": prompt}]}],
         output_format=PageEvents,
     )
     return response.parsed_output.events
@@ -167,9 +239,10 @@ def fetch(source_cfg: dict) -> list[Event]:
             subject = str(msg.get("Subject", ""))[:200]
             sender = str(msg.get("From", ""))[:200]
             message_id = str(msg.get("Message-ID", f"uid-{uid}"))
-            text = body_text(msg)
-            if text:
-                page_events = _extract(client, model, text, subject, sender)
+            extra_text, images = attachment_content(msg)
+            text = "\n".join(part for part in (body_text(msg), extra_text) if part)
+            if text or images:
+                page_events = _extract(client, model, text, subject, sender, images)
                 for pe in page_events:
                     event = to_event(pe, message_id, assume_country)
                     if event:

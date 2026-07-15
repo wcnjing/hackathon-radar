@@ -18,6 +18,21 @@ def test_page_text_respects_limit():
     assert len(_page_text("<p>" + "word " * 10_000 + "</p>", 500)) == 500
 
 
+def test_page_text_preserves_links():
+    """Regression: stripping tags destroyed hrefs, so extracted events could
+    never carry registration links from HTML content."""
+    html = '<p>Join us! <a href="https://unstop.com/hack123?utm=x">Register here</a></p>'
+    text = _page_text(html, 1000)
+    assert "Register here (https://unstop.com/hack123?utm=x)" in text
+
+
+def test_page_text_drops_junk_links():
+    html = '<a href="javascript:void(0)">Click</a> <a href="mailto:a@b.c">Mail</a>'
+    text = _page_text(html, 1000)
+    assert "Click" in text and "Mail" in text
+    assert "javascript" not in text and "mailto" not in text
+
+
 def test_eligibility_excerpt_centers_on_eligibility_section():
     html = "<p>" + "preamble " * 500 + "Eligibility: Teams of up to 5 individuals." + " tail" * 200 + "</p>"
     excerpt = _eligibility_excerpt(html)

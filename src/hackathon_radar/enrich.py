@@ -37,8 +37,21 @@ class EventDetails(BaseModel):
     deadline: str | None
 
 
+_ANCHOR_RE = re.compile(r"<a\s[^>]*?href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.S | re.I)
+
+
+def _keep_link(match: re.Match) -> str:
+    """Render `<a href=U>text</a>` as `text (U)` so extraction can attach real
+    URLs to events — stripping tags outright destroyed every link."""
+    href, inner = match.group(1), match.group(2)
+    if href.startswith(("http://", "https://")) and len(href) <= 300:
+        return f"{inner} ({href})"
+    return inner
+
+
 def _page_text(html: str, limit: int) -> str:
     text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
+    text = _ANCHOR_RE.sub(_keep_link, text)
     text = re.sub(r"<[^>]+>", " ", text)
     text = html_lib.unescape(re.sub(r"\s+", " ", text)).strip()
     return text[:limit]
