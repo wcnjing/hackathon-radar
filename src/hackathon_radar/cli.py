@@ -121,11 +121,21 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
         log.info("daily cap reached; queue depth %d", store.queue_depth())
         return 0
 
-    item = store.pop_queued()
-    if item is None:
-        log.info("queue empty; nothing to send")
-        return 0
-    event, score, reason = item
+    dupe_days = notify_cfg.get("duplicate_title_days", 14)
+    dupe_cutoff = _iso(_now() - timedelta(days=dupe_days))
+    recent_titles = {normalize_title(t) for t in store.notified_titles_since(dupe_cutoff)}
+    while True:
+        item = store.pop_queued()
+        if item is None:
+            log.info("queue empty; nothing to send")
+            return 0
+        event, score, reason = item
+        norm_title = normalize_title(event.title)
+        if norm_title and norm_title in recent_titles:
+            store.drop_queued(event, "skipped at send time: same title as a recent notification")
+            log.info("drop queued duplicate title before send: %s", event.title)
+            continue
+        break
 
     local_hour = datetime.now(ZoneInfo(notify_cfg.get("timezone", "Asia/Singapore"))).hour
     silent = is_quiet_hour(

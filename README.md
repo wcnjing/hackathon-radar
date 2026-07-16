@@ -113,8 +113,10 @@ Layered so no failure mode floods the channel (all knobs in `[notify]`):
 4. **Rolling daily cap** — `max_per_day` (15), counted from the DB, so even a
    lost/evicted DB produces one bounded day, not a flood
 5. **Repeat-title guard** — titles matching anything notified in the last
-   `duplicate_title_days` (14) are skipped; catches the same event cross-posted on
-   two sources and recurring weekly events that get fresh ids
+   `duplicate_title_days` (60) are skipped; catches the same event cross-posted on
+   two sources and recurring weekly events that get fresh ids. The same check also
+   runs immediately before sending, so stale duplicate payloads already in the queue
+   are dropped instead of posted.
 6. **Quiet hours** — posts between `quiet_start` and `quiet_end` (23:00–08:00 SGT)
    deliver silently: they appear in the channel without pinging your phone
 7. **Fail-safe sends** — a failed send stays queued and is retried next run

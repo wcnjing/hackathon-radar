@@ -90,6 +90,18 @@ class Store:
         ).fetchall()
         return [r[0] for r in rows if r[0]]
 
+    def drop_queued(self, event: Event, reason: str) -> None:
+        """Remove a queued payload without marking it notified.
+
+        The event stays recorded as seen, which is what we want for stale queue
+        duplicates: do not send them, and do not pick them up again later.
+        """
+        self.conn.execute(
+            "UPDATE events SET payload = NULL, reason = ? WHERE source = ? AND external_id = ?",
+            (reason, *event.key),
+        )
+        self.conn.commit()
+
     def mark_notified(self, event: Event) -> None:
         self.conn.execute(
             "UPDATE events SET notified_at = ? WHERE source = ? AND external_id = ?",

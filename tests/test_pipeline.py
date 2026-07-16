@@ -113,6 +113,18 @@ class TestStore:
         assert store.queued_titles() == ["Second"]
         store.close()
 
+    def test_drop_queued_keeps_event_seen_without_counting_as_sent(self, tmp_path):
+        store = Store(tmp_path / "test.db")
+        event = make_event(external_id="stale", title="Stale Duplicate")
+        store.queue_event(event, 8.0, "ok")
+
+        store.drop_queued(event, "skipped duplicate")
+
+        assert store.is_seen(event)
+        assert store.queue_depth() == 0
+        assert store.notified_count_since("2000-01-01T00:00:00+00:00") == 0
+        store.close()
+
     def test_migration_from_pre_queue_schema(self, tmp_path):
         import sqlite3
 
@@ -467,6 +479,37 @@ class TestDripQueue:
         assert store.queue_depth() == 1
         assert store.is_seen(duplicate)
         assert store.queued_titles() == ["AI Agents Jam"]
+        store.close()
+
+    def test_drain_drops_stale_queued_duplicate_before_sending(self, tmp_path, monkeypatch):
+        sent = []
+
+        class FakeTelegram:
+            configured = True
+
+            def send(self, text, silent=False):
+                sent.append(text)
+
+        cli = self._wire(monkeypatch, tmp_path, [], FakeTelegram())
+        store = Store(tmp_path / "radar.db")
+        already_sent = make_event(source="devpost", external_id="old", title="AI Agents Jam!")
+        stale_duplicate = make_event(source="luma", external_id="new", title="ai agents jam")
+        fresh = make_event(source="mlh", external_id="fresh", title="Fresh Buildathon")
+        store.record(already_sent, 9.0, "x")
+        store.mark_notified(already_sent)
+        store.queue_event(stale_duplicate, 9.0, "x")
+        store.queue_event(fresh, 8.0, "x")
+        store.set_meta("last_fetch_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        store.set_meta("last_send_at", "2000-01-01T00:00:00+00:00")
+        store.close()
+
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
+        assert len(sent) == 1
+        assert "Fresh Buildathon" in sent[0]
+        store = Store(tmp_path / "radar.db")
+        assert store.queue_depth() == 0
+        assert store.is_seen(stale_duplicate)
+        assert store.notified_count_since("2000-01-01T00:00:00+00:00") == 2
         store.close()
 
 

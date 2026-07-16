@@ -87,7 +87,7 @@ guard, cap) → enrichment (Devpost pages: team size, deadline, expandable brief
 ≤1; cron fires every 30 min; sources re-fetched every 6h).
 
 **Guardrails:** seen-DB; score thresholds (6, networking 8); 30-min drip;
-15/day rolling cap; 14-day repeat-title guard; full-event filter; quiet hours
+15/day rolling cap; 60-day repeat-title guard; full-event filter; quiet hours
 (23:00–08:00 SGT, silent delivery); failed sends stay queued and retry;
 keyword-scorer fallback when the API is unavailable.
 
@@ -130,9 +130,9 @@ action, not routine.
 
 - **Dedupe:** per-source ids; cross-source and recurring events (fresh Luma ids
   weekly) via normalized-title guard; unicode titles normalize to empty → guard
-  skipped rather than everything colliding; the guard checks both recently
-  notified and still-queued titles, so a drip backlog cannot post the same
-  event from two sources
+  skipped rather than everything colliding; the guard checks recently notified
+  and still-queued titles during ingest, then checks recently notified titles
+  again before sending so stale duplicate queue payloads get dropped
 - **Sources:** Devpost prize HTML stripped; invite-only kept but flagged;
   submission window labeled so a past start date doesn't read as "over"; MLH
   season rollover (fetch both years); Luma full/waitlist/sold-out dropped
