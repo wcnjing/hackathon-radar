@@ -1,27 +1,45 @@
-# hackathon-radar
+# Sonar
 
-Watches hackathons, tech meetups, and networking events, scores each new one against
-your interests with Claude, and posts matches to a Telegram channel — so your phone
-buzzes when something worth joining appears.
+A Telegram bot that finds tech events worth an undergrad's time — hackathons,
+buildathons, datathons, competitions, fellowships, workshops — scores each new one
+with Claude, and drip-posts the good ones to the channel [**@EventSonar**](https://t.me/EventSonar).
+So nobody hears about a hackathon three days after registration closed.
+
+Built for Singapore CS/engineering students, self-taught devs, and student builders.
+Events where you **build, compete, or apply** rank above turn-up-and-mingle ones:
+networking sessions and tech talks have to clear a higher bar (score 8 vs 6) to earn
+a post at all.
 
 *(Vision, roadmap, and engineering record: [PROJECT.md](PROJECT.md).)*
 
-**Sources:** Devpost (JSON API), MLH season pages (schema.org microdata), Luma city
-discover feed (`lu.ma/singapore`) for networking events and meetups, plus a
-**watchlist** of arbitrary organizer pages (school clubs, company hackathon sites) —
-add any URL to `sources.watchlist.pages` and Claude extracts events whenever the
-page's content changes.
+> The bot and channel are **Sonar**; the repo, Python package, and CLI are still named
+> `radar` — commands below are `uv run radar ...`.
+
+**Sources (5 pipelines):** Devpost (JSON API), MLH season pages (schema.org
+microdata), the Luma city discover feed (`lu.ma/singapore`), a **watchlist** of
+arbitrary organizer pages (school clubs like NUS Hackers and NTUOSS, company
+hackathon sites) — add any URL to `sources.watchlist.pages` and Claude extracts
+events whenever the page's content changes — and a dedicated **email inbox**
+subscribed to event newsletters, where Claude reads message bodies and attachments
+(.ics, PDF posters, images).
 Cards link to the most informative public event page available, not the deepest
 signup form; the goal is to help a student decide before they commit.
+
 **Scope:** Singapore in-person + online/global events (configurable in `config.toml`).
+
 **Scoring:** `claude-haiku-4-5` rates each event 0–10 against the interest profile in
 `config.toml` — scores and reasons stay in the database (backend-only); the channel
-cards show factual event info, so they read fine in a public channel. New Devpost
-events are also enriched from their pages: team size, registration deadline, and a
-collapsed tap-to-expand challenge brief. Without Anthropic credentials everything
-degrades to keyword matching (no enrichment).
+cards show factual event info, so they read fine in a public channel. Events are
+also tagged by kind (🛠 build / 🤝 network / 🚀 program) and experience level
+(🌱 beginner / ⚡ intermediate / 🔥 advanced). Devpost events about to be posted are
+enriched from their pages: team size, registration deadline, and a collapsed
+tap-to-expand challenge brief. Without Anthropic credentials everything degrades to
+keyword matching (no enrichment).
 
 ## Setup (one-time, ~5 minutes)
+
+To run your own instance (a different channel, another city, your own interest
+profile), you need your own bot and channel:
 
 1. **Create the bot** — in Telegram, message [@BotFather](https://t.me/BotFather) →
    `/newbot` → pick a name. Copy the token it gives you.
@@ -124,12 +142,17 @@ Layered so no failure mode floods the channel (all knobs in `[notify]`):
 
 ## Tuning
 
-Everything about *what you get notified for* lives in `config.toml`:
+Everything about *what the channel gets notified for* lives in `config.toml`:
 
-- `interests.profile` — free text; this is what Claude scores against
+- `interests.profile` — free text describing the audience; this is what Claude
+  scores against. Currently: "tech undergraduate students in Singapore who want to
+  level up", with build/compete/apply events ranked above talks and mixers
 - `interests.min_score` — raise to 7–8 if the channel gets noisy
+- `interests.min_score_by_kind` — per-kind overrides; `networking = 8` is what keeps
+  generic meetups and founders' breakfasts out
 - `scope.mode` — `sg_plus_online` / `sg_only` / `global`
-- `sources.*.enabled` — turn sources on/off
+- `sources.*.enabled` — turn sources on/off; `sources.watchlist.pages` is where you
+  add a new club or company page
 
 ## Cost
 
