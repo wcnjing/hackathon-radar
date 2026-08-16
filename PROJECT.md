@@ -9,12 +9,52 @@ the roadmap, and the engineering record.)*
 
 ## Vision
 
-Every actionable opportunity for an SG tech student — hackathons, buildathons,
-competitions, fellowships — in one calm, trustworthy channel, found
-automatically, so nobody hears about a hackathon three days after registration
-closed.
+**For** driven tech undergraduates in Singapore: the ones who want to build,
+compete and apply, not only attend.
 
-The differentiators over manually-curated lists:
+**Sonar exists so that** nobody misses the opportunity that would have changed
+their trajectory, and nobody skips one because they had no one to do it with.
+
+**Today** it finds every actionable opportunity and puts it in one calm channel,
+so nobody hears about a hackathon three days after registration closed.
+**Next** it helps you find the people to do it with.
+**Then** those people become a community that outlasts any single event.
+**Eventually** we run the gatherings nobody else can, because we are the only
+ones who know who should be in the room.
+
+**What Sonar will not become:** a listings site that posts everything, a generic
+tech community, or another events brand competing with the clubs we depend on.
+
+### The identity, stated plainly
+
+Sonar is for people who *do* things, not people who attend things. That is not a
+slogan; it is enforced in code. `interests.profile` ranks build/compete/apply
+above attend-and-mingle, and `min_score_by_kind` makes networking clear a higher
+bar (8 vs 6) before it can earn a post at all.
+
+Three frictions stand between a driven undergrad and the thing that would change
+their trajectory:
+
+1. **You didn't know it existed.** Solved: that is the radar.
+2. **You had nobody to do it with.** Next: teammate matching.
+3. **You didn't know whether you were good enough.** Partly addressed by the
+   experience-level tags, and the quietest of the three — it is what stops a
+   first-year entering anything at all.
+
+### On eventually hosting events
+
+The endpoint above is deliberately narrow. Running general hackathons would put
+Sonar in direct competition with NTUOSS, NUS Hackers and the GDSC chapters — the
+same committees the growth strategy depends on turning into suppliers.
+
+The events worth running are the ones the product uniquely enables. Once matching
+works, Sonar holds information nobody else has: who is looking for a team, what
+they can do, and which event they want. A pre-hackathon team-formation session
+for *someone else's* hackathon does not compete with the organiser; it sends them
+better teams. That keeps the supplier relationships intact and means events fall
+out of the data rather than requiring Sonar to become an events company.
+
+### Differentiators over manually-curated lists
 
 1. **Automated**, so it never goes stale or depends on a committee member's free time
 2. **Enriched** — each card carries what students actually decide on: deadline,
