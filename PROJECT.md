@@ -25,34 +25,18 @@ ones who know who should be in the room.
 **What Sonar will not become:** a listings site that posts everything, a generic
 tech community, or another events brand competing with the clubs we depend on.
 
-### The identity, stated plainly
+> **The full vision lives in Google Docs** ("Sonar — Vision"), because most of
+> the people who need it are not on GitHub. That is the canonical version: the
+> three frictions, why the stages must happen in order, and the constraint on
+> ever hosting our own events. This section is the summary, kept here because the
+> engineering record should not need a second tab to make sense.
 
-Sonar is for people who *do* things, not people who attend things. That is not a
-slogan; it is enforced in code. `interests.profile` ranks build/compete/apply
-above attend-and-mingle, and `min_score_by_kind` makes networking clear a higher
-bar (8 vs 6) before it can earn a post at all.
-
-Three frictions stand between a driven undergrad and the thing that would change
-their trajectory:
-
-1. **You didn't know it existed.** Solved: that is the radar.
-2. **You had nobody to do it with.** Next: teammate matching.
-3. **You didn't know whether you were good enough.** Partly addressed by the
-   experience-level tags, and the quietest of the three — it is what stops a
-   first-year entering anything at all.
-
-### On eventually hosting events
-
-The endpoint above is deliberately narrow. Running general hackathons would put
-Sonar in direct competition with NTUOSS, NUS Hackers and the GDSC chapters — the
-same committees the growth strategy depends on turning into suppliers.
-
-The events worth running are the ones the product uniquely enables. Once matching
-works, Sonar holds information nobody else has: who is looking for a team, what
-they can do, and which event they want. A pre-hackathon team-formation session
-for *someone else's* hackathon does not compete with the organiser; it sends them
-better teams. That keeps the supplier relationships intact and means events fall
-out of the data rather than requiring Sonar to become an events company.
+**One line of it matters directly to this codebase:** Sonar is for people who
+*do* things, not people who attend things — and that is enforced in code, not
+aspiration. `interests.profile` ranks build/compete/apply above
+attend-and-mingle, and `min_score_by_kind` makes networking clear a higher bar
+(8 vs 6) before it earns a post. If you change either, you are changing the
+product's identity, not tuning a parameter.
 
 ### Differentiators over manually-curated lists
 
