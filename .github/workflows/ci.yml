@@ -1,0 +1,19 @@
+name: ci
+
+# Verifies pull requests. Deliberately has NO secrets and no access to the
+# radar's credentials — the test suite is fully offline (fixtures + mocks).
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run pytest -q
