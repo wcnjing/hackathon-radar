@@ -10,10 +10,32 @@ within 30 minutes of a merge. Work on a branch, open a PR.
 
 ## Setup (~5 minutes)
 
+### macOS
+
 ```sh
 brew install uv gh          # uv manages Python 3.14 itself; no pyenv needed
 gh repo clone wcnjing/hackathon-radar && cd hackathon-radar
 uv sync                     # deps + dev group
+uv run pytest               # must be green before you change anything
+```
+
+### Windows (PowerShell)
+
+Install [Git for Windows](https://git-scm.com/download/win) and the
+[GitHub CLI](https://cli.github.com/), then install `uv` in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Open a new PowerShell window so `uv` is on `PATH`, then clone and set up the
+project:
+
+```powershell
+gh repo clone wcnjing/hackathon-radar
+Set-Location hackathon-radar
+uv sync                     # uv installs/manages Python 3.14 and the dev dependencies
+Copy-Item .env.example .env
 uv run pytest               # must be green before you change anything
 ```
 
@@ -52,11 +74,45 @@ channel, never @EventSonar.
 
 ## Workflow
 
-- Branch from `master`: `feat/short-description` or `fix/short-description`
-- Conventional commits: `feat:`, `fix:`, `chore:`, `docs:`
-- Open a PR — CI runs `pytest` and must pass; `master` takes no direct pushes
-- Keep the diff focused; if you find something unrelated, note it rather than
-  folding it in
+Every change—including documentation and small fixes—must be made on a new
+branch and submitted in a pull request. **Never commit or push directly to
+`master`.**
+
+1. Start from the latest `master`:
+
+   ```sh
+   git switch master
+   git pull --ff-only origin master
+   ```
+
+2. Create a descriptive branch. Use `feat/`, `fix/`, `docs/`, or `test/` as
+   appropriate:
+
+   ```sh
+   git switch -c feat/short-description
+   ```
+
+3. Keep the diff focused and run `uv run pytest`. If you find something
+   unrelated, note it rather than folding it into the same change.
+
+4. Commit using a conventional prefix (`feat:`, `fix:`, `chore:`, `docs:`),
+   then push the branch:
+
+   ```sh
+   git add <files-you-changed>
+   git commit -m "feat: describe the change"
+   git push -u origin feat/short-description
+   ```
+
+5. Open a PR targeting `master`:
+
+   ```sh
+   gh pr create --base master --fill
+   ```
+
+CI runs `pytest` on the PR and must pass before merge. Address review feedback
+with additional commits on the same branch. These Git commands work in
+PowerShell as well as macOS and Linux shells.
 
 ## Testing conventions
 
