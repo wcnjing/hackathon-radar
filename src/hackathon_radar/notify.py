@@ -37,16 +37,25 @@ COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
 
 # team_size is free text written by Claude during enrichment, so this has to
 # cope with real phrasings: "Teams up to 4", "solo or teams up to 5",
-# "1 member", "No teams permitted", "individual members only".
+# "1 member", "No teams permitted", "No team required", "1-4 members".
 #
-# Order matters. An explicit negation or solo wording has to beat the word
-# "team" appearing elsewhere in the sentence, and a numeric limit of 1 has to
-# beat both. "member" is deliberately NOT team evidence: "individual members
-# only" is solo, while "1-4 members" is settled by the number instead.
+# Order matters. Prohibition has to beat the word "team" appearing elsewhere,
+# solo wording has to beat it too, and a numeric limit of 1 beats both.
+#
+# Two traps this has already fallen into, both covered by tests:
+#   - "no team" means opposite things depending on what follows. "No teams
+#     permitted" is solo-only; "No team required" means teams are welcome and
+#     you may come alone, which is the audience the prompt is FOR.
+#   - Not every number is a team size. "Teams of 1 (2026 edition)" must not
+#     read as a team of 2026.
 _NO_TEAMS_RE = re.compile(r"\bno\s+teams?\b")
+_OPTIONAL_RE = re.compile(r"\b(required|needed|necessary|mandatory|compulsory)\b")
 _SOLO_RE = re.compile(r"\b(individuals?|solo|alone|single)\b")
 _TEAM_RE = re.compile(r"\b(teams?|groups?)\b")
 _NUM_RE = re.compile(r"\d+")
+
+# Team sizes are small; anything larger is a year, a prize, or a head count.
+_MAX_PLAUSIBLE_TEAM_SIZE = 100
 
 
 def is_team_based(event: Event) -> bool:
@@ -56,20 +65,22 @@ def is_team_based(event: Event) -> bool:
     arrive with None. Unknown defaults to True: hackathons are team events by
     convention, a missing prompt costs Gate 1 data, and a stray one is merely
     untidy. We suppress only on positive evidence of solo-only entry.
-
-    Known limitation: the numeric rule assumes every number describes team
-    size, so "1 person, up to 3 submissions" would read as team-based.
     """
     text = (event.team_size or "").lower()
     if not text:
         return True
-    if _NO_TEAMS_RE.search(text):
+    # "No teams permitted" is solo-only. "No team required" is the opposite:
+    # teams are allowed and you may also come alone.
+    if _NO_TEAMS_RE.search(text) and not _OPTIONAL_RE.search(text):
         return False
     # Solo wording only counts when nothing offers a team alternative, so
     # "solo or teams up to 5" falls through to the numeric rule below.
     if _SOLO_RE.search(text) and not _TEAM_RE.search(text):
         return False
-    sizes = [int(n) for n in _NUM_RE.findall(text)]
+    sizes = [
+        n for n in (int(m) for m in _NUM_RE.findall(text))
+        if 0 < n <= _MAX_PLAUSIBLE_TEAM_SIZE
+    ]
     if sizes:
         return max(sizes) > 1
     return True

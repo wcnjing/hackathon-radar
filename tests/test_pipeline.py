@@ -315,6 +315,11 @@ class TestTeamPrompt:
             ("Teams", True),
             ("Varies by track", True),         # unparseable, but no solo evidence
             (None, True),                      # enrichment did not run
+            # "no team" flips meaning on the following word: these mean teams
+            # are welcome and you may also come alone, which is our audience.
+            ("No team required", True),
+            ("No teams necessary", True),
+            ("no team needed, join solo or with friends", True),
             # solo only
             ("Individuals only", False),
             ("Solo participation only", False),
@@ -325,6 +330,10 @@ class TestTeamPrompt:
             ("Teams of 1", False),
             ("Maximum team size: 1", False),
             ("1 person", False),
+            ("No teams allowed", False),       # prohibition, unlike "not required"
+            # a year must not be mistaken for a team size
+            ("Teams of 1 (2026 edition)", False),
+            ("Maximum team size: 1 for the 2026 season", False),
         ],
     )
     def test_team_size_phrasings(self, team_size, team_based):
