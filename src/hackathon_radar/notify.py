@@ -24,6 +24,41 @@ LEVEL_LINE = {
 }
 
 
+# Gate 1 experiment. Only shown once a discussion group is linked to the
+# channel — without one there is nowhere to reply, and a card that points
+# nowhere burns trust.
+#
+# Deliberately low-cost and neutral: the public step is just raising a hand.
+# Year, skills and goals are collected privately in a DM follow-up, because a
+# public "state your experience" selects against the beginners matching is for.
+TEAM_PROMPT = "🙋 <b>Looking for teammates?</b> Reply below."
+COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
+
+# There is deliberately no "is this event team-based?" check here.
+#
+# One was tried and removed after three review rounds and fifteen wrong
+# answers. team_size is free text written by Claude during enrichment, and it
+# has no grammar to parse against:
+#
+#   "solo or teams up to 5"                  team allowed
+#   "No teams permitted"                     solo only
+#   "No team required"                       team allowed — opposite meaning
+#   "individual members only"                solo only, despite "member"
+#   "Teams of 1 (2026 edition)"              solo only; a year looks like a size
+#   "Teams of 1, 48-hour sprint"             solo only; a duration looks like one
+#   "1 member per team, $5,000 prize pool"   solo only; a prize looks like one
+#
+# Every fix for one row broke another. The guard also only ever fired on
+# Devpost, because enrichment populates team_size for no other source (see
+# enrich.py), and most hackathons allow teams regardless — an elaborate
+# mechanism for a rare case, wrong in both directions.
+#
+# The costs are asymmetric. A stray prompt on a solo event is untidy, and the
+# linked page states the real rules. A suppressed prompt on a "no team
+# required" event hides it from exactly the students it exists for. So the
+# prompt goes on every hackathon.
+
+
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     """True when `hour` falls in the [start, end) window; handles midnight wrap.
     start == end disables quiet hours entirely."""
@@ -34,7 +69,7 @@ def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     return start <= hour < end
 
 
-def format_message(event: Event) -> str:
+def format_message(event: Event, team_prompt: bool = False) -> str:
     e = html.escape
     emoji = KIND_EMOJI.get(event.kind, "🛠")
     lines = [f"{emoji} <b>{e(event.title)}</b>", ""]
@@ -70,6 +105,11 @@ def format_message(event: Event) -> str:
         # Collapsed by default in Telegram; tap to expand.
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
+    if team_prompt:
+        if event.kind == "hackathon":
+            lines.extend(["", TEAM_PROMPT])
+        elif event.kind == "networking":
+            lines.extend(["", COMPANY_PROMPT])
     return "\n".join(lines)
 
 
