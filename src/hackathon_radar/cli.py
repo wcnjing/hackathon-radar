@@ -142,7 +142,10 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
         local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
     )
     try:
-        telegram.send(format_message(event), silent=silent)
+        telegram.send(
+            format_message(event, team_prompt=notify_cfg.get("team_prompt", False)),
+            silent=silent,
+        )
     except TelegramError as exc:
         # Still queued (not marked notified) — retried next run.
         log.error("send failed, will retry next run: %s", exc)

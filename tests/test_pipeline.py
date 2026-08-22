@@ -8,7 +8,13 @@ from hackathon_radar.filtering import (
     normalize_title,
 )
 from hackathon_radar.models import Event
-from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
+from hackathon_radar.notify import (
+    Telegram,
+    TelegramError,
+    format_message,
+    is_quiet_hour,
+    is_team_based,
+)
 from hackathon_radar.store import Store
 
 SCOPE = {"mode": "sg_plus_online", "home_country": "SG", "home_city": "singapore"}
@@ -248,6 +254,56 @@ class TestFormatMessage:
         # unclear level → no badge (no badge beats a wrong badge)
         msg = format_message(make_event(level=None))
         assert "🌱" not in msg and "🔥" not in msg
+
+
+class TestTeamPrompt:
+    """The Gate 1 reply prompt. Off by default; kind- and team-aware when on."""
+
+    def test_absent_unless_enabled(self):
+        assert "Reply below" not in format_message(make_event(kind="hackathon"))
+
+    def test_hackathon_gets_teammates_prompt(self):
+        msg = format_message(make_event(kind="hackathon"), team_prompt=True)
+        assert "🙋 <b>Looking for teammates?</b> Reply below." in msg
+
+    def test_unknown_team_size_still_prompts(self):
+        # team_size is enrichment-only, so most sources arrive with None. A
+        # missing prompt costs Gate 1 data; a stray one is merely untidy.
+        msg = format_message(make_event(kind="hackathon", team_size=None), team_prompt=True)
+        assert "Looking for teammates?" in msg
+
+    def test_solo_or_teams_reads_as_team_based(self):
+        # The case a naive `"solo" in text` check gets wrong.
+        msg = format_message(
+            make_event(kind="hackathon", team_size="solo or teams up to 5"), team_prompt=True
+        )
+        assert "Looking for teammates?" in msg
+
+    def test_individual_only_suppresses_prompt(self):
+        msg = format_message(
+            make_event(kind="hackathon", team_size="Individuals only"), team_prompt=True
+        )
+        assert "Reply below" not in msg
+
+    def test_networking_gets_company_prompt(self):
+        msg = format_message(make_event(kind="networking"), team_prompt=True)
+        assert "👋 <b>Anyone else going?</b> Reply below." in msg
+        assert "teammates" not in msg
+
+    def test_program_gets_no_prompt(self):
+        assert "Reply below" not in format_message(make_event(kind="program"), team_prompt=True)
+
+    def test_prompt_does_not_reuse_the_team_size_emoji(self):
+        # 👥 already labels the team_size line; the prompt must stay distinct.
+        msg = format_message(
+            make_event(kind="hackathon", team_size="Teams up to 4"), team_prompt=True
+        )
+        assert msg.count("👥") == 1
+
+    def test_is_team_based_defaults_true_on_unknown(self):
+        assert is_team_based(make_event(team_size=None))
+        assert is_team_based(make_event(team_size="Teams up to 4"))
+        assert not is_team_based(make_event(team_size="individual submissions only"))
 
 
 class TestSpamGuards:

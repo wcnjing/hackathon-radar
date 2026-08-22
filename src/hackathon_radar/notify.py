@@ -24,6 +24,37 @@ LEVEL_LINE = {
 }
 
 
+# Gate 1 experiment. Only shown once a discussion group is linked to the
+# channel — without one there is nowhere to reply, and a card that points
+# nowhere burns trust.
+#
+# Deliberately low-cost and neutral: the public step is just raising a hand.
+# Year, skills and goals are collected privately in a DM follow-up, because a
+# public "state your experience" selects against the beginners matching is for.
+TEAM_PROMPT = "🙋 <b>Looking for teammates?</b> Reply below."
+COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
+
+# A hackathon is team-based unless its own text says otherwise. "solo or teams
+# up to 5" must read as team-based, so team wording wins over solo wording.
+_TEAM_HINTS = ("team", "member", "group")
+_SOLO_HINTS = ("individual", "solo only", "no teams", "one person", "single participant")
+
+
+def is_team_based(event: Event) -> bool:
+    """Whether teammates make sense for this event.
+
+    team_size is only populated by enrichment (Devpost today), so most events
+    arrive unknown. Unknown defaults to True: hackathons are team events by
+    convention, and the cost of a missing prompt is higher than a stray one.
+    """
+    text = (event.team_size or "").lower()
+    if any(h in text for h in _TEAM_HINTS):
+        return True
+    if any(h in text for h in _SOLO_HINTS):
+        return False
+    return True
+
+
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     """True when `hour` falls in the [start, end) window; handles midnight wrap.
     start == end disables quiet hours entirely."""
@@ -34,7 +65,7 @@ def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     return start <= hour < end
 
 
-def format_message(event: Event) -> str:
+def format_message(event: Event, team_prompt: bool = False) -> str:
     e = html.escape
     emoji = KIND_EMOJI.get(event.kind, "🛠")
     lines = [f"{emoji} <b>{e(event.title)}</b>", ""]
@@ -70,6 +101,11 @@ def format_message(event: Event) -> str:
         # Collapsed by default in Telegram; tap to expand.
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
+    if team_prompt:
+        if event.kind == "hackathon" and is_team_based(event):
+            lines.extend(["", TEAM_PROMPT])
+        elif event.kind == "networking":
+            lines.extend(["", COMPANY_PROMPT])
     return "\n".join(lines)
 
 
