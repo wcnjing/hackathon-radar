@@ -100,8 +100,10 @@ fetch_every_hours = 6         # how often sources are fetched and the queue refi
 max_per_run = 10              # preview cap for --dry-run
 max_per_day = 15              # rolling 24h cap (also bounds how much one ingest queues)
 duplicate_title_days = 60     # skip events whose title matches a recent notification
-# Gate 1 experiment: appends a "looking for a team?" prompt to hackathon cards
-# only. Requires a linked discussion group, or there is nowhere to reply.
+# Gate 1 experiment: appends a reply prompt to cards — "Looking for teammates?"
+# on team-based hackathons, "Anyone else going?" on networking. Programs get
+# none. Requires a linked discussion group, or there is nowhere to reply.
+# Count the two prompts separately; they measure different things.
 team_prompt = false
 quiet_start = 23              # deliver silently (no ping) from 23:00...
 quiet_end = 8                 # ...to 08:00; set both equal to disable

@@ -165,7 +165,10 @@ def _preview(args: argparse.Namespace, config: dict, store: Store) -> int:
         enrich_events(selected, config, client)
     for event in selected:
         score, _ = scores[event.key]
-        print(f"\n--- would queue ({score:.0f}/10) ---\n{format_message(event)}")
+        card = format_message(
+            event, team_prompt=config.get("notify", {}).get("team_prompt", False)
+        )
+        print(f"\n--- would queue ({score:.0f}/10) ---\n{card}")
     log.info("%d event(s) would be queued (dry run)", len(selected))
     return 0
 

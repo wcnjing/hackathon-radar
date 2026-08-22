@@ -2,6 +2,7 @@
 
 import html
 import os
+import re
 
 import httpx
 
@@ -34,24 +35,43 @@ LEVEL_LINE = {
 TEAM_PROMPT = "🙋 <b>Looking for teammates?</b> Reply below."
 COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
 
-# A hackathon is team-based unless its own text says otherwise. "solo or teams
-# up to 5" must read as team-based, so team wording wins over solo wording.
-_TEAM_HINTS = ("team", "member", "group")
-_SOLO_HINTS = ("individual", "solo only", "no teams", "one person", "single participant")
+# team_size is free text written by Claude during enrichment, so this has to
+# cope with real phrasings: "Teams up to 4", "solo or teams up to 5",
+# "1 member", "No teams permitted", "individual members only".
+#
+# Order matters. An explicit negation or solo wording has to beat the word
+# "team" appearing elsewhere in the sentence, and a numeric limit of 1 has to
+# beat both. "member" is deliberately NOT team evidence: "individual members
+# only" is solo, while "1-4 members" is settled by the number instead.
+_NO_TEAMS_RE = re.compile(r"\bno\s+teams?\b")
+_SOLO_RE = re.compile(r"\b(individuals?|solo|alone|single)\b")
+_TEAM_RE = re.compile(r"\b(teams?|groups?)\b")
+_NUM_RE = re.compile(r"\d+")
 
 
 def is_team_based(event: Event) -> bool:
     """Whether teammates make sense for this event.
 
-    team_size is only populated by enrichment (Devpost today), so most events
-    arrive unknown. Unknown defaults to True: hackathons are team events by
-    convention, and the cost of a missing prompt is higher than a stray one.
+    Enrichment only populates team_size for Devpost today, so most events
+    arrive with None. Unknown defaults to True: hackathons are team events by
+    convention, a missing prompt costs Gate 1 data, and a stray one is merely
+    untidy. We suppress only on positive evidence of solo-only entry.
+
+    Known limitation: the numeric rule assumes every number describes team
+    size, so "1 person, up to 3 submissions" would read as team-based.
     """
     text = (event.team_size or "").lower()
-    if any(h in text for h in _TEAM_HINTS):
+    if not text:
         return True
-    if any(h in text for h in _SOLO_HINTS):
+    if _NO_TEAMS_RE.search(text):
         return False
+    # Solo wording only counts when nothing offers a team alternative, so
+    # "solo or teams up to 5" falls through to the numeric rule below.
+    if _SOLO_RE.search(text) and not _TEAM_RE.search(text):
+        return False
+    sizes = [int(n) for n in _NUM_RE.findall(text)]
+    if sizes:
+        return max(sizes) > 1
     return True
 
 

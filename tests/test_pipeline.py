@@ -1,6 +1,8 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     in_scope,
@@ -187,6 +189,30 @@ class TestDryRun:
         assert cli.run(args) == 0
         assert "would queue" in capsys.readouterr().out
 
+    def test_dry_run_preview_includes_the_team_prompt(self, tmp_path, monkeypatch, capsys):
+        """The preview must match what actually posts, or it cannot be used to
+        check a card before the Gate 1 experiment."""
+        from hackathon_radar import cli
+
+        event = make_event(online=True, title="AI Hackathon", kind="hackathon")
+        config = {
+            "interests": {"keywords": ["ai"], "min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 5, "team_prompt": True},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
+        )
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        assert "Looking for teammates?" in capsys.readouterr().out
+
         store = Store(tmp_path / "radar.db")
         assert not store.is_seen(event)
         store.close()
@@ -279,11 +305,34 @@ class TestTeamPrompt:
         )
         assert "Looking for teammates?" in msg
 
-    def test_individual_only_suppresses_prompt(self):
+    @pytest.mark.parametrize(
+        "team_size,team_based",
+        [
+            # team allowed
+            ("Teams up to 4", True),
+            ("solo or teams up to 5", True),   # solo wording with a team alternative
+            ("1-4 members", True),             # settled by the number, not "members"
+            ("Teams", True),
+            ("Varies by track", True),         # unparseable, but no solo evidence
+            (None, True),                      # enrichment did not run
+            # solo only
+            ("Individuals only", False),
+            ("Solo participation only", False),
+            ("single participant", False),
+            ("individual members only", False),  # "member" must not read as team
+            ("No teams permitted", False),       # negation must beat the word "team"
+            ("1 member", False),                 # numeric limit of 1
+            ("Teams of 1", False),
+            ("Maximum team size: 1", False),
+            ("1 person", False),
+        ],
+    )
+    def test_team_size_phrasings(self, team_size, team_based):
+        assert is_team_based(make_event(team_size=team_size)) is team_based
         msg = format_message(
-            make_event(kind="hackathon", team_size="Individuals only"), team_prompt=True
+            make_event(kind="hackathon", team_size=team_size), team_prompt=True
         )
-        assert "Reply below" not in msg
+        assert ("Looking for teammates?" in msg) is team_based
 
     def test_networking_gets_company_prompt(self):
         msg = format_message(make_event(kind="networking"), team_prompt=True)
