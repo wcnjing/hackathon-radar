@@ -2,7 +2,6 @@
 
 import html
 import os
-import re
 
 import httpx
 
@@ -35,55 +34,29 @@ LEVEL_LINE = {
 TEAM_PROMPT = "🙋 <b>Looking for teammates?</b> Reply below."
 COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
 
-# team_size is free text written by Claude during enrichment, so this has to
-# cope with real phrasings: "Teams up to 4", "solo or teams up to 5",
-# "1 member", "No teams permitted", "No team required", "1-4 members".
+# There is deliberately no "is this event team-based?" check here.
 #
-# Order matters. Prohibition has to beat the word "team" appearing elsewhere,
-# solo wording has to beat it too, and a numeric limit of 1 beats both.
+# One was tried and removed after three review rounds and fifteen wrong
+# answers. team_size is free text written by Claude during enrichment, and it
+# has no grammar to parse against:
 #
-# Two traps this has already fallen into, both covered by tests:
-#   - "no team" means opposite things depending on what follows. "No teams
-#     permitted" is solo-only; "No team required" means teams are welcome and
-#     you may come alone, which is the audience the prompt is FOR.
-#   - Not every number is a team size. "Teams of 1 (2026 edition)" must not
-#     read as a team of 2026.
-_NO_TEAMS_RE = re.compile(r"\bno\s+teams?\b")
-_OPTIONAL_RE = re.compile(r"\b(required|needed|necessary|mandatory|compulsory)\b")
-_SOLO_RE = re.compile(r"\b(individuals?|solo|alone|single)\b")
-_TEAM_RE = re.compile(r"\b(teams?|groups?)\b")
-_NUM_RE = re.compile(r"\d+")
-
-# Team sizes are small; anything larger is a year, a prize, or a head count.
-_MAX_PLAUSIBLE_TEAM_SIZE = 100
-
-
-def is_team_based(event: Event) -> bool:
-    """Whether teammates make sense for this event.
-
-    Enrichment only populates team_size for Devpost today, so most events
-    arrive with None. Unknown defaults to True: hackathons are team events by
-    convention, a missing prompt costs Gate 1 data, and a stray one is merely
-    untidy. We suppress only on positive evidence of solo-only entry.
-    """
-    text = (event.team_size or "").lower()
-    if not text:
-        return True
-    # "No teams permitted" is solo-only. "No team required" is the opposite:
-    # teams are allowed and you may also come alone.
-    if _NO_TEAMS_RE.search(text) and not _OPTIONAL_RE.search(text):
-        return False
-    # Solo wording only counts when nothing offers a team alternative, so
-    # "solo or teams up to 5" falls through to the numeric rule below.
-    if _SOLO_RE.search(text) and not _TEAM_RE.search(text):
-        return False
-    sizes = [
-        n for n in (int(m) for m in _NUM_RE.findall(text))
-        if 0 < n <= _MAX_PLAUSIBLE_TEAM_SIZE
-    ]
-    if sizes:
-        return max(sizes) > 1
-    return True
+#   "solo or teams up to 5"                  team allowed
+#   "No teams permitted"                     solo only
+#   "No team required"                       team allowed — opposite meaning
+#   "individual members only"                solo only, despite "member"
+#   "Teams of 1 (2026 edition)"              solo only; a year looks like a size
+#   "Teams of 1, 48-hour sprint"             solo only; a duration looks like one
+#   "1 member per team, $5,000 prize pool"   solo only; a prize looks like one
+#
+# Every fix for one row broke another. The guard also only ever fired on
+# Devpost, because enrichment populates team_size for no other source (see
+# enrich.py), and most hackathons allow teams regardless — an elaborate
+# mechanism for a rare case, wrong in both directions.
+#
+# The costs are asymmetric. A stray prompt on a solo event is untidy, and the
+# linked page states the real rules. A suppressed prompt on a "no team
+# required" event hides it from exactly the students it exists for. So the
+# prompt goes on every hackathon.
 
 
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:
@@ -133,7 +106,7 @@ def format_message(event: Event, team_prompt: bool = False) -> str:
         lines.append(f"<blockquote expandable>{e(event.brief)}</blockquote>")
     lines.append(f'🔗 <a href="{e(event.url)}">{e(event.url)}</a>')
     if team_prompt:
-        if event.kind == "hackathon" and is_team_based(event):
+        if event.kind == "hackathon":
             lines.extend(["", TEAM_PROMPT])
         elif event.kind == "networking":
             lines.extend(["", COMPANY_PROMPT])

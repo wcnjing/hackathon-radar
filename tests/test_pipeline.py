@@ -1,8 +1,6 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 
-import pytest
-
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     in_scope,
@@ -15,7 +13,6 @@ from hackathon_radar.notify import (
     TelegramError,
     format_message,
     is_quiet_hour,
-    is_team_based,
 )
 from hackathon_radar.store import Store
 
@@ -305,43 +302,22 @@ class TestTeamPrompt:
         )
         assert "Looking for teammates?" in msg
 
-    @pytest.mark.parametrize(
-        "team_size,team_based",
-        [
-            # team allowed
-            ("Teams up to 4", True),
-            ("solo or teams up to 5", True),   # solo wording with a team alternative
-            ("1-4 members", True),             # settled by the number, not "members"
-            ("Teams", True),
-            ("Varies by track", True),         # unparseable, but no solo evidence
-            (None, True),                      # enrichment did not run
-            # "no team" flips meaning on the following word: these mean teams
-            # are welcome and you may also come alone, which is our audience.
-            ("No team required", True),
-            ("No teams necessary", True),
-            ("no team needed, join solo or with friends", True),
-            # solo only
-            ("Individuals only", False),
-            ("Solo participation only", False),
-            ("single participant", False),
-            ("individual members only", False),  # "member" must not read as team
-            ("No teams permitted", False),       # negation must beat the word "team"
-            ("1 member", False),                 # numeric limit of 1
-            ("Teams of 1", False),
-            ("Maximum team size: 1", False),
-            ("1 person", False),
-            ("No teams allowed", False),       # prohibition, unlike "not required"
-            # a year must not be mistaken for a team size
-            ("Teams of 1 (2026 edition)", False),
-            ("Maximum team size: 1 for the 2026 season", False),
-        ],
-    )
-    def test_team_size_phrasings(self, team_size, team_based):
-        assert is_team_based(make_event(team_size=team_size)) is team_based
-        msg = format_message(
-            make_event(kind="hackathon", team_size=team_size), team_prompt=True
-        )
-        assert ("Looking for teammates?" in msg) is team_based
+    def test_hackathon_prompts_whatever_the_team_size_says(self):
+        """No team_size parsing — see the comment in notify.py for why. These
+        are the phrasings a removed guard got wrong; all of them prompt now."""
+        for team_size in [
+            None,
+            "Teams up to 4",
+            "solo or teams up to 5",
+            "Individuals only",
+            "No team required",
+            "No teams permitted",
+            "Teams of 1, 48-hour sprint",
+        ]:
+            msg = format_message(
+                make_event(kind="hackathon", team_size=team_size), team_prompt=True
+            )
+            assert "Looking for teammates?" in msg, team_size
 
     def test_networking_gets_company_prompt(self):
         msg = format_message(make_event(kind="networking"), team_prompt=True)
@@ -357,11 +333,6 @@ class TestTeamPrompt:
             make_event(kind="hackathon", team_size="Teams up to 4"), team_prompt=True
         )
         assert msg.count("👥") == 1
-
-    def test_is_team_based_defaults_true_on_unknown(self):
-        assert is_team_based(make_event(team_size=None))
-        assert is_team_based(make_event(team_size="Teams up to 4"))
-        assert not is_team_based(make_event(team_size="individual submissions only"))
 
 
 class TestSpamGuards:
