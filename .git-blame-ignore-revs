@@ -1,0 +1,6 @@
+# Commits that are pure formatting. Skipped by:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# (CONTRIBUTING.md tells contributors to run that once after cloning.)
+
+# Apply ruff format
+521d6c376a96c608a5bbc8915cfaec78c9c9bbd1
