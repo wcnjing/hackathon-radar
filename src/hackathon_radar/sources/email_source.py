@@ -170,7 +170,8 @@ def to_event(pe: PageEvent, message_id: str, assume_country: str) -> Event | Non
 
 
 def _extract(
-    client, model: str, text: str, subject: str, sender: str, images: list[dict] = []
+    client, model: str, text: str, subject: str, sender: str,
+    images: list[dict] | None = None,
 ) -> list[PageEvent]:
     prompt = PROMPT.format(
         today=date.today().isoformat(), subject=subject, sender=sender
@@ -178,7 +179,7 @@ def _extract(
     response = client.messages.parse(
         model=model,
         max_tokens=2_000,
-        messages=[{"role": "user", "content": [*images, {"type": "text", "text": prompt}]}],
+        messages=[{"role": "user", "content": [*(images or []), {"type": "text", "text": prompt}]}],
         output_format=PageEvents,
     )
     return response.parsed_output.events

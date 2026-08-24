@@ -25,4 +25,22 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.14.0",
 ]
+
+[tool.ruff]
+# Close to the code's existing shape: only 10 lines exceeded 100 before this
+# was added, so adopting it is a small reformat rather than a rewrite.
+line-length = 100
+
+[tool.ruff.lint]
+# Pinned explicitly rather than inheriting ruff's defaults, which widen between
+# releases — a formatter that changes its mind on upgrade is worse than none.
+#   E4/E7/E9, F  real problems: unused imports, undefined names, broken syntax
+#   I            import sorting, the usual source of pointless review churn
+#   B            bugbear, e.g. mutable default arguments
+#   UP           pyupgrade; we are on 3.14, so modern syntax is always available
+# Deliberately NOT enabled: BLE001 and S110/S112. The broad `except Exception`
+# handlers in scoring.py and enrich.py are intentional degradation paths, and
+# flagging them would pressure contributors into removing resilience.
+select = ["E4", "E7", "E9", "F", "I", "B", "UP"]

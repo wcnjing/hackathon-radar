@@ -1,5 +1,5 @@
 import argparse
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
@@ -513,7 +513,7 @@ class TestDripQueue:
         assert cli.run(args) == 0  # 30-min gap not elapsed → nothing sent
         assert len(sent) == 1
 
-        past = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(timespec="seconds")
+        past = (datetime.now(UTC) - timedelta(minutes=31)).isoformat(timespec="seconds")
         store.set_meta("last_send_at", past)  # pretend last post was 31 min ago
         store.close()
         assert cli.run(args) == 0
@@ -555,7 +555,7 @@ class TestDripQueue:
         store = Store(tmp_path / "radar.db")
         assert store.queue_depth() == 0  # first event was queued, then dripped
         store.set_meta("last_fetch_at", "2000-01-01T00:00:00+00:00")
-        store.set_meta("last_send_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        store.set_meta("last_send_at", datetime.now(UTC).isoformat(timespec="seconds"))
         store.queue_event(make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x")
         store.close()
 
@@ -584,7 +584,7 @@ class TestDripQueue:
         store.mark_notified(already_sent)
         store.queue_event(stale_duplicate, 9.0, "x")
         store.queue_event(fresh, 8.0, "x")
-        store.set_meta("last_fetch_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        store.set_meta("last_fetch_at", datetime.now(UTC).isoformat(timespec="seconds"))
         store.set_meta("last_send_at", "2000-01-01T00:00:00+00:00")
         store.close()
 
