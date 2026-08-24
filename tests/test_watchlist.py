@@ -4,8 +4,12 @@ from hackathon_radar.sources.watchlist import PageEvent, to_event
 
 def page_event(**overrides) -> PageEvent:
     defaults = dict(
-        title="Some Event", url=None, dates_text=None, location=None,
-        country_code=None, is_online=False,
+        title="Some Event",
+        url=None,
+        dates_text=None,
+        location=None,
+        country_code=None,
+        is_online=False,
     )
     defaults.update(overrides)
     return PageEvent(**defaults)
@@ -28,7 +32,9 @@ class TestToEvent:
         assert ev.country == "US"
 
     def test_online_flag_carries(self):
-        ev = to_event(page_event(title="Virtual Trading Comp", is_online=True), "https://x.org/", "SG")
+        ev = to_event(
+            page_event(title="Virtual Trading Comp", is_online=True), "https://x.org/", "SG"
+        )
         assert ev.online is True
 
     def test_event_without_link_falls_back_to_page(self):
@@ -61,9 +67,7 @@ class TestHashGate:
 
         monkeypatch.setattr(watchlist.httpx, "Client", lambda **kw: FakeWeb())
         monkeypatch.setattr(watchlist, "STATE_PATH", tmp_path / "state.json")
-        monkeypatch.setattr(
-            "hackathon_radar.scoring.make_client", lambda: object()
-        )
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", lambda: object())
         monkeypatch.setattr(
             watchlist,
             "_extract",

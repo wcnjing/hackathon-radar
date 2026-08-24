@@ -17,6 +17,9 @@ brew install uv gh          # uv manages Python 3.14 itself; no pyenv needed
 gh repo clone wcnjing/hackathon-radar && cd hackathon-radar
 uv sync                     # deps + dev group
 uv run pytest               # must be green before you change anything
+
+# once per clone: keeps the bulk-formatting commit out of `git blame`
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
 
 ### Windows (PowerShell)
@@ -37,6 +40,9 @@ Set-Location hackathon-radar
 uv sync                     # uv installs/manages Python 3.14 and the dev dependencies
 Copy-Item .env.example .env
 uv run pytest               # must be green before you change anything
+
+# once per clone: keeps the bulk-formatting commit out of `git blame`
+git config blame.ignoreRevsFile .git-blame-ignore-revs
 ```
 
 No Docker, no database to provision, no services — SQLite is a file, and every
@@ -92,8 +98,16 @@ branch and submitted in a pull request. **Never commit or push directly to
    git switch -c feat/short-description
    ```
 
-3. Keep the diff focused and run `uv run pytest`. If you find something
-   unrelated, note it rather than folding it into the same change.
+3. Keep the diff focused. Before pushing, run:
+
+   ```sh
+   uv run ruff format        # rewrites files in place
+   uv run ruff check --fix   # lint, fixing what it safely can
+   uv run pytest
+   ```
+
+   If you find something unrelated, note it rather than folding it into the
+   same change.
 
 4. Commit using a conventional prefix (`feat:`, `fix:`, `chore:`, `docs:`),
    then push the branch:
@@ -110,7 +124,10 @@ branch and submitted in a pull request. **Never commit or push directly to
    gh pr create --base master --fill
    ```
 
-CI runs `pytest` on the PR and must pass before merge. Address review feedback
+CI runs `ruff format --check`, `ruff check` and `pytest` on the PR, and all
+three must pass before merge. The formatter is not a matter of taste: it exists
+so nobody spends review time on layout. If it reformats your code, that is the
+answer, not the start of a discussion. Address review feedback
 with additional commits on the same branch. These Git commands work in
 PowerShell as well as macOS and Linux shells.
 

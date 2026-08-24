@@ -7,8 +7,12 @@ from hackathon_radar.sources.watchlist import PageEvent
 
 def page_event(**overrides) -> PageEvent:
     defaults = dict(
-        title="Some Event", url=None, dates_text=None, location=None,
-        country_code=None, is_online=False,
+        title="Some Event",
+        url=None,
+        dates_text=None,
+        location=None,
+        country_code=None,
+        is_online=False,
     )
     defaults.update(overrides)
     return PageEvent(**defaults)
@@ -107,7 +111,9 @@ class TestNewUids:
 
 class TestToEvent:
     def test_builds_event_with_stable_id(self):
-        pe = page_event(title="JPM Code for Good", url="https://jpm.example/cfg", dates_text="Sep 5")
+        pe = page_event(
+            title="JPM Code for Good", url="https://jpm.example/cfg", dates_text="Sep 5"
+        )
         ev = to_event(pe, "<msg-1@mail>", "SG")
         assert ev.source == "email"
         assert ev.url == "https://jpm.example/cfg"

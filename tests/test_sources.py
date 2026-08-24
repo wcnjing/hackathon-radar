@@ -30,7 +30,13 @@ def test_devpost_skips_closed_and_flags_invite_only():
         "hackathons": [
             {"id": 1, "title": "Closed", "open_state": "ended", "themes": []},
             {"id": 2, "title": "Invite", "open_state": "open", "invite_only": True, "themes": []},
-            {"id": 3, "title": "Open", "open_state": "open", "themes": [], "url": "https://x.devpost.com"},
+            {
+                "id": 3,
+                "title": "Open",
+                "open_state": "open",
+                "themes": [],
+                "url": "https://x.devpost.com",
+            },
         ]
     }
     events = devpost.parse_response(data)
@@ -107,7 +113,9 @@ def test_mlh_upcoming_filter():
     from hackathon_radar.models import Event
 
     past = Event(source="mlh", external_id="a", title="a", url="u", ends_at="2020-01-01T00:00:00Z")
-    future = Event(source="mlh", external_id="b", title="b", url="u", ends_at="2099-01-01T00:00:00Z")
+    future = Event(
+        source="mlh", external_id="b", title="b", url="u", ends_at="2099-01-01T00:00:00Z"
+    )
     today = date(2026, 7, 7)
     assert not mlh._upcoming(past, today)
     assert mlh._upcoming(future, today)

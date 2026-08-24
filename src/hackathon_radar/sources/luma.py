@@ -7,7 +7,7 @@ place id; the discover API then returns the full upcoming list for that place.
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -83,7 +83,7 @@ def _upcoming(event: Event, now: datetime) -> bool:
 def fetch(source_cfg: dict) -> list[Event]:
     city = source_cfg.get("city", "singapore")
     limit = source_cfg.get("limit", 50)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     with httpx.Client(
         headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True

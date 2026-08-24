@@ -50,7 +50,7 @@ is_online (true for virtual events)."""
 def _load_state() -> dict:
     try:
         return json.loads(STATE_PATH.read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
@@ -170,15 +170,21 @@ def to_event(pe: PageEvent, message_id: str, assume_country: str) -> Event | Non
 
 
 def _extract(
-    client, model: str, text: str, subject: str, sender: str, images: list[dict] = []
+    client,
+    model: str,
+    text: str,
+    subject: str,
+    sender: str,
+    images: list[dict] | None = None,
 ) -> list[PageEvent]:
-    prompt = PROMPT.format(
-        today=date.today().isoformat(), subject=subject, sender=sender
-    ) + f"\n\n<email_body>\n{text}\n</email_body>"
+    prompt = (
+        PROMPT.format(today=date.today().isoformat(), subject=subject, sender=sender)
+        + f"\n\n<email_body>\n{text}\n</email_body>"
+    )
     response = client.messages.parse(
         model=model,
         max_tokens=2_000,
-        messages=[{"role": "user", "content": [*images, {"type": "text", "text": prompt}]}],
+        messages=[{"role": "user", "content": [*(images or []), {"type": "text", "text": prompt}]}],
         output_format=PageEvents,
     )
     return response.parsed_output.events
@@ -224,7 +230,10 @@ def fetch(source_cfg: dict) -> list[Event]:
     uids = new_uids([int(u) for u in data[0].split()], last_seen)
     log.info(
         "email: %s has %d message(s); %d new since uid %d",
-        folder, total, len(uids), last_seen,
+        folder,
+        total,
+        len(uids),
+        last_seen,
     )
     if not uids:
         mail.logout()
