@@ -16,4 +16,9 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync
+      # Formatting and lint run before the tests: they fail in under a second
+      # and tell a contributor exactly what to run, rather than making them
+      # wait on the suite to find out a line was too long.
+      - run: uv run ruff format --check
+      - run: uv run ruff check
       - run: uv run pytest -q
