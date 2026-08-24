@@ -9,12 +9,36 @@ the roadmap, and the engineering record.)*
 
 ## Vision
 
-Every actionable opportunity for an SG tech student — hackathons, buildathons,
-competitions, fellowships — in one calm, trustworthy channel, found
-automatically, so nobody hears about a hackathon three days after registration
-closed.
+**For** driven tech undergraduates in Singapore: the ones who want to build,
+compete and apply, not only attend.
 
-The differentiators over manually-curated lists:
+**Sonar exists so that** nobody misses the opportunity that would have changed
+their trajectory, and nobody skips one because they had no one to do it with.
+
+**Today** it finds every actionable opportunity and puts it in one calm channel,
+so nobody hears about a hackathon three days after registration closed.
+**Next** it helps you find the people to do it with.
+**Then** those people become a community that outlasts any single event.
+**Eventually** we run the gatherings nobody else can, because we are the only
+ones who know who should be in the room.
+
+**What Sonar will not become:** a listings site that posts everything, a generic
+tech community, or another events brand competing with the clubs we depend on.
+
+> **The full vision lives in Google Docs** ("Sonar — Vision"), because most of
+> the people who need it are not on GitHub. That is the canonical version: the
+> three frictions, why the stages must happen in order, and the constraint on
+> ever hosting our own events. This section is the summary, kept here because the
+> engineering record should not need a second tab to make sense.
+
+**One line of it matters directly to this codebase:** Sonar is for people who
+*do* things, not people who attend things — and that is enforced in code, not
+aspiration. `interests.profile` ranks build/compete/apply above
+attend-and-mingle, and `min_score_by_kind` makes networking clear a higher bar
+(8 vs 6) before it earns a post. If you change either, you are changing the
+product's identity, not tuning a parameter.
+
+### Differentiators over manually-curated lists
 
 1. **Automated**, so it never goes stale or depends on a committee member's free time
 2. **Enriched** — each card carries what students actually decide on: deadline,
