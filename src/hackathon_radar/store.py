@@ -62,8 +62,7 @@ class Store:
             "INSERT OR IGNORE INTO events"
             " (source, external_id, title, url, first_seen, score, reason, payload)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (*event.key, event.title, event.url, _now(), score, reason,
-             json.dumps(asdict(event))),
+            (*event.key, event.title, event.url, _now(), score, reason, json.dumps(asdict(event))),
         )
         self.conn.commit()
 

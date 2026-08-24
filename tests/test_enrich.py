@@ -34,7 +34,13 @@ def test_page_text_drops_junk_links():
 
 
 def test_eligibility_excerpt_centers_on_eligibility_section():
-    html = "<p>" + "preamble " * 500 + "Eligibility: Teams of up to 5 individuals." + " tail" * 200 + "</p>"
+    html = (
+        "<p>"
+        + "preamble " * 500
+        + "Eligibility: Teams of up to 5 individuals."
+        + " tail" * 200
+        + "</p>"
+    )
     excerpt = _eligibility_excerpt(html)
     assert "Teams of up to 5" in excerpt
     assert len(excerpt) <= 2_500

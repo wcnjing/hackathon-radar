@@ -244,7 +244,10 @@ class TestFormatMessage:
         # scores and relevance reasons are backend-only; cards stay public-friendly
         assert "/10" not in msg
         assert "💡" not in msg
-        assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
+        assert (
+            "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>"
+            in msg
+        )
         assert 'href="https://example.com"' in msg
         assert "Register here" not in msg
         assert "https://example.com/register" not in msg
@@ -337,7 +340,9 @@ class TestTeamPrompt:
 
 class TestSpamGuards:
     def test_normalize_title(self):
-        assert normalize_title("AI Wednesdays #42 — July Edition!") == "ai wednesdays 42 july edition"
+        assert (
+            normalize_title("AI Wednesdays #42 — July Edition!") == "ai wednesdays 42 july edition"
+        )
         assert normalize_title("  AI   Wednesdays #43  ") != ""
 
     def test_quiet_hours_wrap_midnight(self):
@@ -556,7 +561,9 @@ class TestDripQueue:
         assert store.queue_depth() == 0  # first event was queued, then dripped
         store.set_meta("last_fetch_at", "2000-01-01T00:00:00+00:00")
         store.set_meta("last_send_at", datetime.now(UTC).isoformat(timespec="seconds"))
-        store.queue_event(make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x")
+        store.queue_event(
+            make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x"
+        )
         store.close()
 
         assert cli.run(args) == 0

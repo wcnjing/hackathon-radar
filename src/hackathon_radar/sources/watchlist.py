@@ -63,7 +63,7 @@ class PageEvents(BaseModel):
 def _load_state() -> dict:
     try:
         return json.loads(STATE_PATH.read_text())
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}
 
 
@@ -127,9 +127,7 @@ def fetch(source_cfg: dict) -> list[Event]:
     state = _load_state()
     events: list[Event] = []
 
-    with httpx.Client(
-        headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True
-    ) as web:
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True) as web:
         for page_url in pages:
             try:
                 text = _page_text(web.get(page_url).text, 8_000)
