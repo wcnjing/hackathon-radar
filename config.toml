@@ -106,8 +106,9 @@ duplicate_title_days = 60     # skip events whose title matches a recent notific
 # Count the two prompts separately; they measure different things.
 team_prompt = false
 # Tappable button under each card, pointing at the event page. Set to an empty
-# string to send cards without one. Note the link stays in the message body as
-# well, so the card keeps its preview and survives forwarding intact.
+# string to send cards without one. The link stays in the message body as well,
+# because a button is not a link and a button-only card would show no web page
+# preview.
 register_button_text = "Register →"
 quiet_start = 23              # deliver silently (no ping) from 23:00...
 quiet_end = 8                 # ...to 08:00; set both equal to disable

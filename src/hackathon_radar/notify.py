@@ -65,12 +65,21 @@ def build_reply_markup(event: Event, label: str) -> dict | None:
     The button points at `event.url`, the informative detail page, because
     `register_url` is never populated by any source — Devpost deliberately
     leaves it unset so cards land on the overview rather than a signup wall.
-    The label lives in config so that wording can be revisited without a
-    deploy.
+    The label lives in config so the wording can be revisited without a deploy.
+
+    Telegram is stricter about inline-keyboard URLs than about links in message
+    text: a non-http(s) button URL or blank label is rejected with a 400. That
+    would be a *permanent* failure, and because pop_queued always returns the
+    same highest-scoring event, one bad card would head-of-line block the queue
+    forever. Both sources that build `url` from an LLM reading untrusted input
+    (email bodies, arbitrary web pages) can produce such a URL, so anything
+    unusable degrades to no button rather than a failed send.
     """
-    if not label or not event.url:
+    label = (label or "").strip()
+    url = event.url or ""
+    if not label or not url.startswith(("https://", "http://")):
         return None
-    return {"inline_keyboard": [[{"text": label, "url": event.url}]]}
+    return {"inline_keyboard": [[{"text": label, "url": url}]]}
 
 
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:

@@ -1,6 +1,8 @@
 import argparse
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     in_scope,
@@ -352,6 +354,33 @@ class TestRegisterButton:
     def test_no_url_means_no_keyboard(self):
         assert build_reply_markup(make_event(url=""), "Register →") is None
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "mailto:hi@example.com",
+            "javascript:alert(1)",
+            "www.example.com/event",  # schemeless
+            "ftp://example.com/e",
+            "tel:+6591234567",
+        ],
+    )
+    def test_non_http_urls_get_no_button(self, url):
+        """Telegram rejects these with a 400, which is permanent. Because
+        pop_queued always returns the same highest-scoring event, one such card
+        would head-of-line block the queue forever. Both the email and watchlist
+        sources build `url` from an LLM reading untrusted input, so degrade to
+        no button instead."""
+        assert build_reply_markup(make_event(url=url), "Register →") is None
+
+    @pytest.mark.parametrize("label", [" ", "\t", "\n  "])
+    def test_whitespace_label_gets_no_button(self, label):
+        # Telegram rejects blank button text; a config typo must not stall the queue.
+        assert build_reply_markup(make_event(), label) is None
+
+    def test_label_is_trimmed(self):
+        markup = build_reply_markup(make_event(url="https://e.example"), "  Register →  ")
+        assert markup["inline_keyboard"][0][0]["text"] == "Register →"
+
     def test_send_omits_reply_markup_when_absent(self, monkeypatch):
         """Telegram reads an explicit null as 'remove the keyboard', so the key
         must be absent rather than None."""
@@ -370,8 +399,8 @@ class TestRegisterButton:
         assert sent["reply_markup"] == markup
 
     def test_card_still_carries_the_link_in_the_body(self):
-        """The button is additive. The URL stays in the text so the card keeps
-        its link preview and loses nothing when forwarded."""
+        """The button is additive. The URL stays in the text because a button
+        is not a link, so a button-only card would show no web page preview."""
         assert "https://cloudhacks.org" in format_message(make_event(url="https://cloudhacks.org"))
 
 
@@ -533,6 +562,34 @@ class TestDripQueue:
             cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
         )
         return cli
+
+    def test_drain_passes_the_button_through_to_telegram(self, tmp_path, monkeypatch):
+        """Pins the seam between build_reply_markup and the send site.
+
+        The FakeTelegram stubs elsewhere take **kwargs and ignore them, so the
+        whole feature could be deleted from _drain with the rest of the suite
+        still green. This is the test that goes red if that happens, or if the
+        config key at the send site is misspelled.
+        """
+        captured = {}
+
+        class RecordingTelegram:
+            configured = True
+
+            def send(self, text, silent=False, **kwargs):
+                captured["markup"] = kwargs.get("reply_markup")
+
+        cli = self._wire(
+            monkeypatch, tmp_path, [make_event(url="https://cloudhacks.org")], RecordingTelegram()
+        )
+        cli.load_config()["notify"]["register_button_text"] = "Sign up now →"
+
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
+        # The label deliberately differs from the code default, so a misspelled
+        # config key at the send site falls back to "Register →" and fails here.
+        assert captured["markup"] == {
+            "inline_keyboard": [[{"text": "Sign up now →", "url": "https://cloudhacks.org"}]]
+        }
 
     def test_one_post_per_run_until_gap_elapses(self, tmp_path, monkeypatch):
         sent = []
