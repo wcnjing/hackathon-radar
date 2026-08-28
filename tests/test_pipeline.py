@@ -11,6 +11,7 @@ from hackathon_radar.models import Event
 from hackathon_radar.notify import (
     Telegram,
     TelegramError,
+    build_reply_markup,
     format_message,
     is_quiet_hour,
 )
@@ -338,6 +339,42 @@ class TestTeamPrompt:
         assert msg.count("👥") == 1
 
 
+class TestRegisterButton:
+    def test_builds_a_single_url_button(self):
+        event = make_event(url="https://cloudhacks.org")
+        assert build_reply_markup(event, "Register →") == {
+            "inline_keyboard": [[{"text": "Register →", "url": "https://cloudhacks.org"}]]
+        }
+
+    def test_empty_label_means_no_keyboard(self):
+        assert build_reply_markup(make_event(), "") is None
+
+    def test_no_url_means_no_keyboard(self):
+        assert build_reply_markup(make_event(url=""), "Register →") is None
+
+    def test_send_omits_reply_markup_when_absent(self, monkeypatch):
+        """Telegram reads an explicit null as 'remove the keyboard', so the key
+        must be absent rather than None."""
+        sent = {}
+        tg = Telegram(token="t", chat_id="c")
+        monkeypatch.setattr(tg, "_call", lambda method, **payload: sent.update(payload))
+        tg.send("hello")
+        assert "reply_markup" not in sent
+
+    def test_send_includes_reply_markup_when_given(self, monkeypatch):
+        sent = {}
+        tg = Telegram(token="t", chat_id="c")
+        monkeypatch.setattr(tg, "_call", lambda method, **payload: sent.update(payload))
+        markup = {"inline_keyboard": [[{"text": "Register →", "url": "https://e.example"}]]}
+        tg.send("hello", reply_markup=markup)
+        assert sent["reply_markup"] == markup
+
+    def test_card_still_carries_the_link_in_the_body(self):
+        """The button is additive. The URL stays in the text so the card keeps
+        its link preview and loses nothing when forwarded."""
+        assert "https://cloudhacks.org" in format_message(make_event(url="https://cloudhacks.org"))
+
+
 class TestSpamGuards:
     def test_normalize_title(self):
         assert (
@@ -503,7 +540,7 @@ class TestDripQueue:
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(3)]
@@ -528,7 +565,7 @@ class TestDripQueue:
         class FailingTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 raise TelegramError("Telegram sendMessage failed: whatever")
 
         events = [make_event(external_id="1", title="Event 1")]
@@ -546,7 +583,7 @@ class TestDripQueue:
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         first = make_event(source="devpost", external_id="1", title="AI Agents Jam!")
@@ -579,7 +616,7 @@ class TestDripQueue:
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         cli = self._wire(monkeypatch, tmp_path, [], FakeTelegram())

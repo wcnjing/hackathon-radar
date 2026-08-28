@@ -59,6 +59,20 @@ COMPANY_PROMPT = "👋 <b>Anyone else going?</b> Reply below."
 # prompt goes on every hackathon.
 
 
+def build_reply_markup(event: Event, label: str) -> dict | None:
+    """A single URL button under the card, or None to send without a keyboard.
+
+    The button points at `event.url`, the informative detail page, because
+    `register_url` is never populated by any source — Devpost deliberately
+    leaves it unset so cards land on the overview rather than a signup wall.
+    The label lives in config so that wording can be revisited without a
+    deploy.
+    """
+    if not label or not event.url:
+        return None
+    return {"inline_keyboard": [[{"text": label, "url": event.url}]]}
+
+
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:
     """True when `hour` falls in the [start, end) window; handles midnight wrap.
     start == end disables quiet hours entirely."""
@@ -122,15 +136,19 @@ class Telegram:
     def configured(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    def send(self, text: str, silent: bool = False) -> None:
-        self._call(
-            "sendMessage",
-            chat_id=self.chat_id,
-            text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=False,
-            disable_notification=silent,
-        )
+    def send(self, text: str, silent: bool = False, reply_markup: dict | None = None) -> None:
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False,
+            "disable_notification": silent,
+        }
+        # Omitted rather than sent as null: Telegram treats an explicit null as
+        # an instruction to strip the keyboard.
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        self._call("sendMessage", **payload)
 
     def get_updates(self) -> list[dict]:
         return self._call("getUpdates")
