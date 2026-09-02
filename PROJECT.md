@@ -169,9 +169,11 @@ action, not routine.
   survive extraction; per-message failure doesn't kill the batch; IMAP `UID n:*`
   returns-last-message quirk filtered
 - **Delivery:** Telegram HTML escaping (incl. inside expandable quotes); errors
-  never contain the token (it's embedded in API URLs); send-then-record
-  ordering so failures retry rather than vanish; drip gap enforced across runs
-  via DB timestamp, immune to run timing drift
+  never contain the token (it's embedded in API URLs, and transport errors that
+  quote the URL are redacted); network failures (DNS, timeouts, resets) take the
+  same graceful retry path as an API refusal rather than crashing the run;
+  send-then-record ordering so failures retry rather than vanish; drip gap
+  enforced across runs via DB timestamp, immune to run timing drift
 - **Ops:** DB schema migrates in place (pre-queue DBs gain the payload column);
   concurrent runs impossible (concurrency group); missing credentials degrade
   each feature independently (keyword scoring / skip enrichment / skip source)
@@ -186,8 +188,12 @@ action, not routine.
   while events sit queued would crash drain until the cache is cleared
 - **No queue staleness check** — under sustained cap pressure an event could
   post after its date has passed
-- **Telegram transport errors** (timeouts, DNS) aren't caught like API errors —
-  a network blip crashes the run instead of the graceful retry path
+- **A timed-out send can still double-post** — a read timeout means the request
+  may have reached Telegram and posted before the response was lost, but the
+  event is never marked notified, so the retry sends it again. Closing this
+  needs an idempotency key: recording intent-to-send *before* the call rather
+  than success after it. (The crash itself is fixed; transport errors now take
+  the graceful retry path.)
 - **Anthropic outage during ingest** → keyword fallback scores are recorded
   permanently; events Claude would have loved are never re-scored
 - **IMAP UIDVALIDITY reset unhandled** — a Gmail folder reset would silently

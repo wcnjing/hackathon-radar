@@ -162,15 +162,33 @@ class Telegram:
     def get_updates(self) -> list[dict]:
         return self._call("getUpdates")
 
+    def _redact(self, text: str) -> str:
+        """Strip the bot token from anything headed for a log or a traceback.
+
+        httpx puts the request URL in some of its error messages, and the token
+        is a path segment of every Telegram API URL.
+        """
+        return text.replace(self.token, "***") if self.token else text
+
     def _call(self, method: str, **payload):
-        resp = httpx.post(
-            API_BASE.format(token=self.token) + f"/{method}", json=payload, timeout=30
-        )
+        try:
+            resp = httpx.post(
+                API_BASE.format(token=self.token) + f"/{method}", json=payload, timeout=30
+            )
+        except httpx.RequestError as exc:
+            # Transport failed before Telegram answered: DNS, connect/read
+            # timeout, reset, TLS. Converted so the caller's TelegramError
+            # handler leaves the event queued and retries next run, instead of
+            # the exception killing the whole run (and, because actions/cache
+            # only saves on success, rolling the database back with it).
+            raise TelegramError(
+                f"Telegram {method} unreachable: {type(exc).__name__}: {self._redact(str(exc))}"
+            ) from exc
         try:
             data = resp.json()
         except ValueError:
             data = {}
         if not data.get("ok"):
             description = data.get("description") or f"HTTP {resp.status_code}"
-            raise TelegramError(f"Telegram {method} failed: {description}")
+            raise TelegramError(f"Telegram {method} failed: {self._redact(description)}")
         return data["result"]
