@@ -625,3 +625,47 @@ class TestTelegramErrors:
             telegram.send("hello")
         assert "Forbidden: bot is not a member" in str(excinfo.value)
         assert "SECRETTOKENVALUE" not in str(excinfo.value)
+
+    def _raising(self, monkeypatch, exc):
+        from hackathon_radar import notify
+
+        def boom(*a, **k):
+            raise exc
+
+        monkeypatch.setattr(notify.httpx, "post", boom)
+        return Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+
+    def test_connect_error_becomes_telegram_error(self, monkeypatch):
+        """A transport failure must reach the caller as TelegramError, so the
+        send site leaves the event queued instead of crashing the whole run."""
+        import httpx
+        import pytest
+
+        telegram = self._raising(monkeypatch, httpx.ConnectError("getaddrinfo failed"))
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "ConnectError" in str(excinfo.value)
+
+    def test_read_timeout_becomes_telegram_error(self, monkeypatch):
+        """Caught by the httpx.RequestError base class, not one named subclass."""
+        import httpx
+        import pytest
+
+        telegram = self._raising(monkeypatch, httpx.ReadTimeout("timed out"))
+        with pytest.raises(TelegramError):
+            telegram.send("hello")
+
+    def test_transport_error_never_leaks_the_token(self, monkeypatch):
+        """httpx quotes the request URL in some transport errors, and the token
+        is a path segment of every Telegram API URL."""
+        import httpx
+        import pytest
+
+        leaky = httpx.ConnectError(
+            "failed connecting to https://api.telegram.org/bot123456:SECRETTOKENVALUE/sendMessage"
+        )
+        telegram = self._raising(monkeypatch, leaky)
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "SECRETTOKENVALUE" not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
