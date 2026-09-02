@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from hackathon_radar.filtering import keyword_score
+from hackathon_radar.filtering import classify_kind, keyword_score
 from hackathon_radar.models import Event
 
 log = logging.getLogger(__name__)
@@ -61,6 +61,34 @@ def _event_payload(event: Event) -> dict:
     }
 
 
+def _fallback_score(event: Event, interests: dict) -> tuple[float, str]:
+    """Score one event without Claude: classify its kind, then keyword-score it.
+
+    `keyword_score` alone never sets `kind`, so every fallback-scored event used
+    to inherit the `Event.kind` default of "hackathon" and be judged against the
+    base `min_score` — letting mixers and meetups through the very gate that
+    `min_score_by_kind = { networking = 8 }` exists to close.
+
+    A raised per-kind threshold means "only exceptional events of this kind get
+    posted", and exceptional is a judgement counting keywords cannot make. So
+    when the fallback puts an event in a kind whose bar is raised, its score is
+    held below that bar: the event is still recorded (and so still deduped and
+    never re-notified), it just cannot post on keyword hits alone.
+    """
+    event.kind = classify_kind(event)
+    score, reason = keyword_score(event, interests)
+    min_score = interests.get("min_score", 6)
+    raised = interests.get("min_score_by_kind", {}).get(event.kind)
+    if raised is not None and raised > min_score and score >= raised:
+        score = float(raised) - 1.0
+        reason = f"{reason} (held below the {event.kind} bar: no Claude scoring)"
+    return score, reason
+
+
+def _fallback_scores(events: list[Event], interests: dict):
+    return {e.key: _fallback_score(e, interests) for e in events}
+
+
 def score_events(
     events: list[Event], config: dict, client=None
 ) -> dict[tuple[str, str], tuple[float, str]]:
@@ -69,7 +97,7 @@ def score_events(
     if not events:
         return {}
     if client is None:
-        return {e.key: keyword_score(e, interests) for e in events}
+        return _fallback_scores(events, interests)
 
     import anthropic
 
@@ -77,10 +105,10 @@ def score_events(
         return _claude_scores(client, events, config)
     except anthropic.AuthenticationError as exc:
         log.warning("Anthropic auth failed (%s); using keyword scorer", exc.message)
-        return {e.key: keyword_score(e, interests) for e in events}
+        return _fallback_scores(events, interests)
     except Exception:
         log.exception("Claude scoring failed, falling back to keyword scorer")
-        return {e.key: keyword_score(e, interests) for e in events}
+        return _fallback_scores(events, interests)
 
 
 def make_client():
@@ -128,5 +156,5 @@ def _claude_scores(
     # Anything the model skipped falls back to the keyword scorer.
     for event in events:
         if event.key not in results:
-            results[event.key] = keyword_score(event, interests)
+            results[event.key] = _fallback_score(event, interests)
     return results

@@ -1,12 +1,17 @@
 import argparse
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+import httpx
 
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
+    classify_kind,
     in_scope,
     keyword_score,
     normalize_title,
 )
+from hackathon_radar.scoring import ScoreBatch, ScoredEvent, score_events
 from hackathon_radar.models import Event
 from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
 from hackathon_radar.store import Store
@@ -533,3 +538,150 @@ class TestTelegramErrors:
             telegram.send("hello")
         assert "Forbidden: bot is not a member" in str(excinfo.value)
         assert "SECRETTOKENVALUE" not in str(excinfo.value)
+
+
+class TestIssue4KeywordFallbackKind:
+    """Issue #4: the keyword fallback must not sneak networking events past the
+    raised `min_score_by_kind` bar. Regression coverage for every degraded path:
+    no client, an auth failure, and any other exception during Claude scoring."""
+
+    INTERESTS = {
+        # the real config.toml keyword list, trimmed to what these titles hit
+        "keywords": ["ai", "meetup", "networking", "founder", "hackathon", "student"],
+        "min_score": 6,
+        "min_score_by_kind": {"networking": 8},
+    }
+    CONFIG = {"interests": INTERESTS, "scoring": {"batch_size": 20}}
+
+    class _AuthFails:
+        class messages:
+            @staticmethod
+            def parse(*a, **k):
+                import anthropic
+                raise anthropic.AuthenticationError(
+                    "bad key", response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
+                    body=None,
+                )
+
+    class _Explodes:
+        class messages:
+            @staticmethod
+            def parse(*a, **k):
+                raise RuntimeError("transient 529 overloaded")
+
+    def _posts(self, event, score):
+        """Mirror cli._select's gate: does this score clear the kind's bar?"""
+        threshold = self.INTERESTS["min_score_by_kind"].get(
+            event.kind, self.INTERESTS["min_score"]
+        )
+        return score >= threshold
+
+    def _degraded_clients(self):
+        return [("no client", None), ("auth error", self._AuthFails()),
+                ("other exception", self._Explodes())]
+
+    def test_founders_networking_meetup_never_posts_on_any_degraded_path(self):
+        """The issue's own example: 'Founders Networking Meetup' scores 8.0 from
+        the keyword scorer, which used to clear the base threshold of 6 because
+        kind defaulted to 'hackathon'."""
+        for label, client in self._degraded_clients():
+            event = make_event(title="Founders Networking Meetup", location="Singapore")
+            scores = score_events([event], self.CONFIG, client)
+            score, reason = scores[event.key]
+            assert event.kind == "networking", f"{label}: kind was {event.kind!r}"
+            assert not self._posts(event, score), f"{label}: posted at {score}"
+
+    def test_genuine_hackathon_still_posts_on_degraded_paths(self):
+        """The cap must not punish events that aren't networking."""
+        for label, client in self._degraded_clients():
+            event = make_event(title="AI Student Hackathon", location="Singapore")
+            scores = score_events([event], self.CONFIG, client)
+            score, _ = scores[event.key]
+            assert event.kind == "hackathon", f"{label}: kind was {event.kind!r}"
+            assert self._posts(event, score), f"{label}: blocked at {score}"
+
+    def test_claude_success_path_is_untouched(self):
+        """Acceptance criterion 3: when Claude scores, its kind and score win —
+        a networking event it rates 9 still posts, and no cap is applied."""
+        event = make_event(title="Founders Networking Meetup")
+
+        class _Scores:
+            class messages:
+                @staticmethod
+                def parse(*a, **k):
+                    scored = ScoredEvent(
+                        id="test:1", score=9, reason="rare access to major builders",
+                        kind="networking", level="unclear",
+                    )
+                    return SimpleNamespace(parsed_output=ScoreBatch(scores=[scored]))
+
+        scores = score_events([event], self.CONFIG, _Scores())
+        score, reason = scores[event.key]
+        assert event.kind == "networking"
+        assert score == 9.0
+        assert reason == "rare access to major builders"
+        assert self._posts(event, score)
+
+    def test_events_claude_skips_are_capped_too(self):
+        """A batch response that omits an event falls back per-event."""
+        skipped = make_event(external_id="2", title="Generic Tech Meetup")
+
+        class _ReturnsNothing:
+            class messages:
+                @staticmethod
+                def parse(*a, **k):
+                    return SimpleNamespace(parsed_output=ScoreBatch(scores=[]))
+
+        scores = score_events([skipped], self.CONFIG, _ReturnsNothing())
+        score, _ = scores[skipped.key]
+        assert skipped.kind == "networking"
+        assert not self._posts(skipped, score)
+
+    def test_classify_kind_tiers(self):
+        assert classify_kind(make_event(title="NUS Hackers Buildathon")) == "hackathon"
+        assert classify_kind(make_event(title="Founders' Breakfast")) == "networking"
+        assert classify_kind(make_event(title="Y Combinator Fellowship")) == "program"
+        # ambiguous titles default to networking, the stricter bar
+        assert classify_kind(make_event(title="Untitled Thing")) == "networking"
+
+    def test_end_to_end_meetup_not_posted_when_scoring_degrades(self, tmp_path, monkeypatch, capsys):
+        """Acceptance criterion 1, through the real pipeline: with no Anthropic
+        client, a meetup is recorded but never printed as a would-post card."""
+        from hackathon_radar import cli
+
+        meetup = make_event(external_id="1", title="Founders Networking Meetup",
+                            location="Singapore")
+        hackathon = make_event(external_id="2", title="AI Student Hackathon",
+                               location="Singapore")
+        config = {
+            "interests": self.INTERESTS,
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 9},
+            "enrich": {"enabled": False},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [meetup, hackathon])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        out = capsys.readouterr().out
+        assert "AI Student Hackathon" in out
+        assert "Founders Networking Meetup" not in out
+
+    def test_competitions_are_not_mistaken_for_networking(self):
+        """Competition vocabulary the README uses must land in the hackathon
+        tier, or the ambiguous->networking default silently raises their bar."""
+        for title in [
+            "OpenCV AI Competition 2026, powered by AWS",
+            "SPEED August AI Challenge",
+            "NUS Datathon 2026",
+            "Optiver Ready Trader Go Contest",
+        ]:
+            assert classify_kind(make_event(title=title)) == "hackathon", title
+
+    def test_word_boundaries_hold(self):
+        """The tier regexes are anchored: no substring false positives."""
+        # "jam" must not fire inside "pyjamas"; "hack" is a prefix match by design
+        assert classify_kind(make_event(title="Pyjamas Party")) == "networking"
+        assert classify_kind(make_event(title="Hackathon Kickoff")) == "hackathon"
