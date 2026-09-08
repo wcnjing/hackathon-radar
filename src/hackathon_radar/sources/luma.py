@@ -65,7 +65,9 @@ def _format_start(starts_at: str | None, tz: str | None) -> str:
         dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
         if tz:
             dt = dt.astimezone(ZoneInfo(tz))
-        return f"{dt:%a %b %-d, %-I:%M %p}"
+        day = str(dt.day)
+        hour12 = str(int(dt.strftime("%I")))
+        return f"{dt:%a %b} {day}, {hour12}:{dt:%M %p}"
     except Exception:
         return ""
 
