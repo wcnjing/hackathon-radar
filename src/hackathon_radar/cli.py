@@ -227,7 +227,13 @@ def get_chat_id(args: argparse.Namespace) -> int:
     if not telegram.token:
         log.error("TELEGRAM_BOT_TOKEN not set in .env")
         return 1
-    updates = telegram.get_updates()
+    try:
+        updates = telegram.get_updates()
+    except TelegramError as exc:
+        # A transport blip during setup should read as one error line, not a
+        # stack trace: main() has no top-level handler.
+        log.error("%s", exc)
+        return 1
     chats = {}
     for update in updates:
         message = update.get("channel_post") or update.get("message") or {}

@@ -763,3 +763,60 @@ class TestTelegramErrors:
             telegram.send("hello")
         assert "SECRETTOKENVALUE" not in str(excinfo.value)
         assert "***" in str(excinfo.value)
+
+    def test_transport_error_never_leaks_the_token_through_the_traceback(self, monkeypatch):
+        """Redacting the message is not enough: `from exc` would keep the raw
+        httpx error as __cause__, and Python prints a chained exception in full,
+        putting the unredacted token directly above the redacted copy."""
+        import traceback
+
+        import httpx
+        import pytest
+
+        leaky = httpx.ConnectError(
+            "failed connecting to https://api.telegram.org/bot123456:SECRETTOKENVALUE/sendMessage"
+        )
+        telegram = self._raising(monkeypatch, leaky)
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "SECRETTOKENVALUE" not in rendered
+        # The chain is what would carry it back in; pin it directly so a future
+        # `from exc` fails here rather than only in a rendered traceback.
+        assert excinfo.value.__cause__ is None
+
+    def test_non_string_description_still_raises_telegram_error(self, monkeypatch):
+        """`data` is unvalidated JSON from the network — a proxy error page that
+        parses as an object with a falsy `ok` reaches the redaction. A raw
+        AttributeError there would escape _drain's `except TelegramError` and
+        kill the run: the exact failure this class exists to prevent."""
+        import pytest
+
+        from hackathon_radar import notify
+
+        class FakeResponse:
+            status_code = 429
+
+            def json(self):
+                return {"ok": False, "description": {"code": 429}}
+
+        monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: FakeResponse())
+        telegram = Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "429" in str(excinfo.value)
+
+    def test_get_chat_id_reports_a_transport_failure_instead_of_raising(self, monkeypatch):
+        """get-chat-id is run by hand during setup, and main() has no top-level
+        handler — an unreachable API must print one error line, not a traceback."""
+        import httpx
+
+        from hackathon_radar import cli, notify
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:SECRETTOKENVALUE")
+
+        def boom(*a, **k):
+            raise httpx.ConnectError("getaddrinfo failed")
+
+        monkeypatch.setattr(notify.httpx, "post", boom)
+        assert cli.get_chat_id(argparse.Namespace()) == 1

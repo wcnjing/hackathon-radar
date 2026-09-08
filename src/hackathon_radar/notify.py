@@ -162,12 +162,16 @@ class Telegram:
     def get_updates(self) -> list[dict]:
         return self._call("getUpdates")
 
-    def _redact(self, text: str) -> str:
+    def _redact(self, text: object) -> str:
         """Strip the bot token from anything headed for a log or a traceback.
 
         httpx puts the request URL in some of its error messages, and the token
         is a path segment of every Telegram API URL.
+
+        Takes any object: the response-side caller passes an unvalidated JSON
+        field, and an AttributeError here would escape as a non-TelegramError.
         """
+        text = str(text)
         return text.replace(self.token, "***") if self.token else text
 
     def _call(self, method: str, **payload):
@@ -179,11 +183,18 @@ class Telegram:
             # Transport failed before Telegram answered: DNS, connect/read
             # timeout, reset, TLS. Converted so the caller's TelegramError
             # handler leaves the event queued and retries next run, instead of
-            # the exception killing the whole run (and, because actions/cache
-            # only saves on success, rolling the database back with it).
+            # the exception unwinding the run mid-drain.
+            #
+            # Note: the run still exits 1 (_drain returns -1), so actions/cache
+            # still skips its post-save and data/ is still rolled back. Fixing
+            # that means deciding whether a failed send should exit 0 — see #1.
+            #
+            # `from None`, not `from exc`: Python renders a chained exception's
+            # message in full, which would print the unredacted httpx message
+            # (and the token it quotes) directly above the redacted one.
             raise TelegramError(
-                f"Telegram {method} unreachable: {type(exc).__name__}: {self._redact(str(exc))}"
-            ) from exc
+                f"Telegram {method} unreachable: {type(exc).__name__}: {self._redact(exc)}"
+            ) from None
         try:
             data = resp.json()
         except ValueError:
