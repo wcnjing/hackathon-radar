@@ -138,8 +138,11 @@ def format_message(event: Event, team_prompt: bool = False) -> str:
 
 class Telegram:
     def __init__(self, token: str | None = None, chat_id: str | None = None):
-        self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        self.chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")
+        # Stripped: a secret pasted into GitHub Secrets or .env commonly carries
+        # a trailing newline, and a non-printable character in the URL path
+        # makes httpx raise InvalidURL, which is not a RequestError.
+        self.token = (token or os.environ.get("TELEGRAM_BOT_TOKEN", "")).strip()
+        self.chat_id = (chat_id or os.environ.get("TELEGRAM_CHAT_ID", "")).strip()
 
     @property
     def configured(self) -> bool:
@@ -179,7 +182,7 @@ class Telegram:
             resp = httpx.post(
                 API_BASE.format(token=self.token) + f"/{method}", json=payload, timeout=30
             )
-        except httpx.RequestError as exc:
+        except (httpx.RequestError, httpx.InvalidURL) as exc:
             # Transport failed before Telegram answered: DNS, connect/read
             # timeout, reset, TLS. Converted so the caller's TelegramError
             # handler leaves the event queued and retries next run, instead of
@@ -199,7 +202,14 @@ class Telegram:
             data = resp.json()
         except ValueError:
             data = {}
+        # Valid JSON that is not an object (a bare list, null, or string from a
+        # proxy or CDN) would otherwise reach .get() as an AttributeError, which
+        # is not a TelegramError and so escapes the caller's handler.
+        if not isinstance(data, dict):
+            data = {}
         if not data.get("ok"):
             description = data.get("description") or f"HTTP {resp.status_code}"
             raise TelegramError(f"Telegram {method} failed: {self._redact(description)}")
+        if "result" not in data:
+            raise TelegramError(f"Telegram {method} returned ok without a result")
         return data["result"]
