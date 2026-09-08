@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from hackathon_radar.models import Event
@@ -62,8 +62,7 @@ class Store:
             "INSERT OR IGNORE INTO events"
             " (source, external_id, title, url, first_seen, score, reason, payload)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (*event.key, event.title, event.url, _now(), score, reason,
-             json.dumps(asdict(event))),
+            (*event.key, event.title, event.url, _now(), score, reason, json.dumps(asdict(event))),
         )
         self.conn.commit()
 
@@ -142,4 +141,4 @@ class Store:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")

@@ -1,6 +1,6 @@
 """MLH (Major League Hacking) — season event pages carry schema.org microdata."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import httpx
 from bs4 import BeautifulSoup
@@ -76,7 +76,7 @@ def _upcoming(event: Event, today: date) -> bool:
 
 
 def fetch(source_cfg: dict) -> list[Event]:
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     # MLH seasons are named for the year they end in; fetch this year's and next.
     years = (today.year, today.year + 1)
     seen: dict[str, Event] = {}

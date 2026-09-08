@@ -4,17 +4,16 @@ import re
 
 from hackathon_radar.models import Event
 
-
 NETWORKING_TITLE_RE = re.compile(
     r"\b(meetup|mixer|social|demo day|founders?['’]? (breakfast|coffee)|"
-    r"talk|panel|fireside|networking)\b", re.I
+    r"talk|panel|fireside|networking)\b",
+    re.I,
 )
-PROGRAM_TITLE_RE = re.compile(
-    r"\b(accelerator|fellowship|cohort|bootcamp|incubat\w*)\b", re.I
-)
+PROGRAM_TITLE_RE = re.compile(r"\b(accelerator|fellowship|cohort|bootcamp|incubat\w*)\b", re.I)
 HACKATHON_TITLE_RE = re.compile(
     r"\bhack|buildathon|build-a-thon|datathon|sprint|\bjam\b|"
-    r"\b(challenge|competition|contest)\b", re.I
+    r"\b(challenge|competition|contest)\b",
+    re.I,
 )
 
 

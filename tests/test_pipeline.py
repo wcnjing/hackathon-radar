@@ -1,6 +1,6 @@
 import argparse
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import httpx
@@ -13,9 +13,15 @@ from hackathon_radar.filtering import (
     keyword_score,
     normalize_title,
 )
-from hackathon_radar.scoring import ScoreBatch, ScoredEvent, score_events
 from hackathon_radar.models import Event
-from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
+from hackathon_radar.notify import (
+    Telegram,
+    TelegramError,
+    build_reply_markup,
+    format_message,
+    is_quiet_hour,
+)
+from hackathon_radar.scoring import ScoreBatch, ScoredEvent, score_events
 from hackathon_radar.store import Store
 
 SCOPE = {"mode": "sg_plus_online", "home_country": "SG", "home_city": "singapore"}
@@ -188,6 +194,30 @@ class TestDryRun:
         assert cli.run(args) == 0
         assert "would queue" in capsys.readouterr().out
 
+    def test_dry_run_preview_includes_the_team_prompt(self, tmp_path, monkeypatch, capsys):
+        """The preview must match what actually posts, or it cannot be used to
+        check a card before the Gate 1 experiment."""
+        from hackathon_radar import cli
+
+        event = make_event(online=True, title="AI Hackathon", kind="hackathon")
+        config = {
+            "interests": {"keywords": ["ai"], "min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 5, "team_prompt": True},
+        }
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
+        )
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        assert "Looking for teammates?" in capsys.readouterr().out
+
         store = Store(tmp_path / "radar.db")
         assert not store.is_seen(event)
         store.close()
@@ -222,7 +252,10 @@ class TestFormatMessage:
         # scores and relevance reasons are backend-only; cards stay public-friendly
         assert "/10" not in msg
         assert "💡" not in msg
-        assert "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>" in msg
+        assert (
+            "<blockquote expandable>Build an AI agent that does &lt;cool&gt; things.</blockquote>"
+            in msg
+        )
         assert 'href="https://example.com"' in msg
         assert "Register here" not in msg
         assert "https://example.com/register" not in msg
@@ -257,9 +290,130 @@ class TestFormatMessage:
         assert "🌱" not in msg and "🔥" not in msg
 
 
+class TestTeamPrompt:
+    """The Gate 1 reply prompt. Off by default; kind- and team-aware when on."""
+
+    def test_absent_unless_enabled(self):
+        assert "Reply below" not in format_message(make_event(kind="hackathon"))
+
+    def test_hackathon_gets_teammates_prompt(self):
+        msg = format_message(make_event(kind="hackathon"), team_prompt=True)
+        assert "🙋 <b>Looking for teammates?</b> Reply below." in msg
+
+    def test_unknown_team_size_still_prompts(self):
+        # team_size is enrichment-only, so most sources arrive with None. A
+        # missing prompt costs Gate 1 data; a stray one is merely untidy.
+        msg = format_message(make_event(kind="hackathon", team_size=None), team_prompt=True)
+        assert "Looking for teammates?" in msg
+
+    def test_solo_or_teams_reads_as_team_based(self):
+        # The case a naive `"solo" in text` check gets wrong.
+        msg = format_message(
+            make_event(kind="hackathon", team_size="solo or teams up to 5"), team_prompt=True
+        )
+        assert "Looking for teammates?" in msg
+
+    def test_hackathon_prompts_whatever_the_team_size_says(self):
+        """No team_size parsing — see the comment in notify.py for why. These
+        are the phrasings a removed guard got wrong; all of them prompt now."""
+        for team_size in [
+            None,
+            "Teams up to 4",
+            "solo or teams up to 5",
+            "Individuals only",
+            "No team required",
+            "No teams permitted",
+            "Teams of 1, 48-hour sprint",
+        ]:
+            msg = format_message(
+                make_event(kind="hackathon", team_size=team_size), team_prompt=True
+            )
+            assert "Looking for teammates?" in msg, team_size
+
+    def test_networking_gets_company_prompt(self):
+        msg = format_message(make_event(kind="networking"), team_prompt=True)
+        assert "👋 <b>Anyone else going?</b> Reply below." in msg
+        assert "teammates" not in msg
+
+    def test_program_gets_no_prompt(self):
+        assert "Reply below" not in format_message(make_event(kind="program"), team_prompt=True)
+
+    def test_prompt_does_not_reuse_the_team_size_emoji(self):
+        # 👥 already labels the team_size line; the prompt must stay distinct.
+        msg = format_message(
+            make_event(kind="hackathon", team_size="Teams up to 4"), team_prompt=True
+        )
+        assert msg.count("👥") == 1
+
+
+class TestRegisterButton:
+    def test_builds_a_single_url_button(self):
+        event = make_event(url="https://cloudhacks.org")
+        assert build_reply_markup(event, "Register →") == {
+            "inline_keyboard": [[{"text": "Register →", "url": "https://cloudhacks.org"}]]
+        }
+
+    def test_empty_label_means_no_keyboard(self):
+        assert build_reply_markup(make_event(), "") is None
+
+    def test_no_url_means_no_keyboard(self):
+        assert build_reply_markup(make_event(url=""), "Register →") is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "mailto:hi@example.com",
+            "javascript:alert(1)",
+            "www.example.com/event",  # schemeless
+            "ftp://example.com/e",
+            "tel:+6591234567",
+        ],
+    )
+    def test_non_http_urls_get_no_button(self, url):
+        """Telegram rejects these with a 400, which is permanent. Because
+        pop_queued always returns the same highest-scoring event, one such card
+        would head-of-line block the queue forever. Both the email and watchlist
+        sources build `url` from an LLM reading untrusted input, so degrade to
+        no button instead."""
+        assert build_reply_markup(make_event(url=url), "Register →") is None
+
+    @pytest.mark.parametrize("label", [" ", "\t", "\n  "])
+    def test_whitespace_label_gets_no_button(self, label):
+        # Telegram rejects blank button text; a config typo must not stall the queue.
+        assert build_reply_markup(make_event(), label) is None
+
+    def test_label_is_trimmed(self):
+        markup = build_reply_markup(make_event(url="https://e.example"), "  Register →  ")
+        assert markup["inline_keyboard"][0][0]["text"] == "Register →"
+
+    def test_send_omits_reply_markup_when_absent(self, monkeypatch):
+        """Telegram reads an explicit null as 'remove the keyboard', so the key
+        must be absent rather than None."""
+        sent = {}
+        tg = Telegram(token="t", chat_id="c")
+        monkeypatch.setattr(tg, "_call", lambda method, **payload: sent.update(payload))
+        tg.send("hello")
+        assert "reply_markup" not in sent
+
+    def test_send_includes_reply_markup_when_given(self, monkeypatch):
+        sent = {}
+        tg = Telegram(token="t", chat_id="c")
+        monkeypatch.setattr(tg, "_call", lambda method, **payload: sent.update(payload))
+        markup = {"inline_keyboard": [[{"text": "Register →", "url": "https://e.example"}]]}
+        tg.send("hello", reply_markup=markup)
+        assert sent["reply_markup"] == markup
+
+    def test_card_still_carries_the_link_in_the_body(self):
+        """The button is additive. The URL stays in the text because a button
+        is not a link, so a button-only card would show no web page preview."""
+        assert "https://cloudhacks.org" in format_message(make_event(url="https://cloudhacks.org"))
+
+
 class TestSpamGuards:
     def test_normalize_title(self):
-        assert normalize_title("AI Wednesdays #42 — July Edition!") == "ai wednesdays 42 july edition"
+        assert (
+            normalize_title("AI Wednesdays #42 — July Edition!") == "ai wednesdays 42 july edition"
+        )
         assert normalize_title("  AI   Wednesdays #43  ") != ""
 
     def test_quiet_hours_wrap_midnight(self):
@@ -414,13 +568,41 @@ class TestDripQueue:
         )
         return cli
 
+    def test_drain_passes_the_button_through_to_telegram(self, tmp_path, monkeypatch):
+        """Pins the seam between build_reply_markup and the send site.
+
+        The FakeTelegram stubs elsewhere take **kwargs and ignore them, so the
+        whole feature could be deleted from _drain with the rest of the suite
+        still green. This is the test that goes red if that happens, or if the
+        config key at the send site is misspelled.
+        """
+        captured = {}
+
+        class RecordingTelegram:
+            configured = True
+
+            def send(self, text, silent=False, **kwargs):
+                captured["markup"] = kwargs.get("reply_markup")
+
+        cli = self._wire(
+            monkeypatch, tmp_path, [make_event(url="https://cloudhacks.org")], RecordingTelegram()
+        )
+        cli.load_config()["notify"]["register_button_text"] = "Sign up now →"
+
+        assert cli.run(argparse.Namespace(dry_run=False, max_notify=None)) == 0
+        # The label deliberately differs from the code default, so a misspelled
+        # config key at the send site falls back to "Register →" and fails here.
+        assert captured["markup"] == {
+            "inline_keyboard": [[{"text": "Sign up now →", "url": "https://cloudhacks.org"}]]
+        }
+
     def test_one_post_per_run_until_gap_elapses(self, tmp_path, monkeypatch):
         sent = []
 
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         events = [make_event(external_id=str(i), title=f"Event {i}") for i in range(3)]
@@ -435,7 +617,7 @@ class TestDripQueue:
         assert cli.run(args) == 0  # 30-min gap not elapsed → nothing sent
         assert len(sent) == 1
 
-        past = (datetime.now(timezone.utc) - timedelta(minutes=31)).isoformat(timespec="seconds")
+        past = (datetime.now(UTC) - timedelta(minutes=31)).isoformat(timespec="seconds")
         store.set_meta("last_send_at", past)  # pretend last post was 31 min ago
         store.close()
         assert cli.run(args) == 0
@@ -445,7 +627,7 @@ class TestDripQueue:
         class FailingTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 raise TelegramError("Telegram sendMessage failed: whatever")
 
         events = [make_event(external_id="1", title="Event 1")]
@@ -463,7 +645,7 @@ class TestDripQueue:
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         first = make_event(source="devpost", external_id="1", title="AI Agents Jam!")
@@ -477,8 +659,10 @@ class TestDripQueue:
         store = Store(tmp_path / "radar.db")
         assert store.queue_depth() == 0  # first event was queued, then dripped
         store.set_meta("last_fetch_at", "2000-01-01T00:00:00+00:00")
-        store.set_meta("last_send_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
-        store.queue_event(make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x")
+        store.set_meta("last_send_at", datetime.now(UTC).isoformat(timespec="seconds"))
+        store.queue_event(
+            make_event(source="watchlist", external_id="queued", title="AI Agents Jam"), 8.0, "x"
+        )
         store.close()
 
         assert cli.run(args) == 0
@@ -494,7 +678,7 @@ class TestDripQueue:
         class FakeTelegram:
             configured = True
 
-            def send(self, text, silent=False):
+            def send(self, text, silent=False, **kwargs):
                 sent.append(text)
 
         cli = self._wire(monkeypatch, tmp_path, [], FakeTelegram())
@@ -506,7 +690,7 @@ class TestDripQueue:
         store.mark_notified(already_sent)
         store.queue_event(stale_duplicate, 9.0, "x")
         store.queue_event(fresh, 8.0, "x")
-        store.set_meta("last_fetch_at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        store.set_meta("last_fetch_at", datetime.now(UTC).isoformat(timespec="seconds"))
         store.set_meta("last_send_at", "2000-01-01T00:00:00+00:00")
         store.close()
 
@@ -560,8 +744,10 @@ class TestIssue4KeywordFallbackKind:
             @staticmethod
             def parse(*a, **k):
                 import anthropic
+
                 raise anthropic.AuthenticationError(
-                    "bad key", response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
+                    "bad key",
+                    response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
                     body=None,
                 )
 
@@ -573,14 +759,15 @@ class TestIssue4KeywordFallbackKind:
 
     def _posts(self, event, score):
         """Mirror cli._select's gate: does this score clear the kind's bar?"""
-        threshold = self.INTERESTS["min_score_by_kind"].get(
-            event.kind, self.INTERESTS["min_score"]
-        )
+        threshold = self.INTERESTS["min_score_by_kind"].get(event.kind, self.INTERESTS["min_score"])
         return score >= threshold
 
     def _degraded_clients(self):
-        return [("no client", None), ("auth error", self._AuthFails()),
-                ("other exception", self._Explodes())]
+        return [
+            ("no client", None),
+            ("auth error", self._AuthFails()),
+            ("other exception", self._Explodes()),
+        ]
 
     def test_founders_networking_meetup_never_posts_on_any_degraded_path(self):
         """The issue's own example: 'Founders Networking Meetup' scores 8.0 from
@@ -612,8 +799,11 @@ class TestIssue4KeywordFallbackKind:
                 @staticmethod
                 def parse(*a, **k):
                     scored = ScoredEvent(
-                        id="test:1", score=9, reason="rare access to major builders",
-                        kind="networking", level="unclear",
+                        id="test:1",
+                        score=9,
+                        reason="rare access to major builders",
+                        kind="networking",
+                        level="unclear",
                     )
                     return SimpleNamespace(parsed_output=ScoreBatch(scores=[scored]))
 
@@ -646,15 +836,17 @@ class TestIssue4KeywordFallbackKind:
         # ambiguous titles default to networking, the stricter bar
         assert classify_kind(make_event(title="Untitled Thing")) == "networking"
 
-    def test_end_to_end_meetup_not_posted_when_scoring_degrades(self, tmp_path, monkeypatch, capsys):
+    def test_end_to_end_meetup_not_posted_when_scoring_degrades(
+        self, tmp_path, monkeypatch, capsys
+    ):
         """Acceptance criterion 1, through the real pipeline: with no Anthropic
         client, a meetup is recorded but never printed as a would-post card."""
         from hackathon_radar import cli
 
-        meetup = make_event(external_id="1", title="Founders Networking Meetup",
-                            location="Singapore")
-        hackathon = make_event(external_id="2", title="AI Student Hackathon",
-                               location="Singapore")
+        meetup = make_event(
+            external_id="1", title="Founders Networking Meetup", location="Singapore"
+        )
+        hackathon = make_event(external_id="2", title="AI Student Hackathon", location="Singapore")
         config = {
             "interests": self.INTERESTS,
             "scope": {"mode": "global"},
@@ -710,11 +902,20 @@ class TestIssue8ScoringDeterminism:
                     outer.calls.append(kwargs)
                     payload = kwargs["messages"][0]["content"]
                     ids = re.findall(r'"id": "([^"]+)"', payload)
-                    return SimpleNamespace(parsed_output=ScoreBatch(scores=[
-                        ScoredEvent(id=i, score=7, reason="stable reason",
-                                    kind="hackathon", level="unclear")
-                        for i in ids
-                    ]))
+                    return SimpleNamespace(
+                        parsed_output=ScoreBatch(
+                            scores=[
+                                ScoredEvent(
+                                    id=i,
+                                    score=7,
+                                    reason="stable reason",
+                                    kind="hackathon",
+                                    level="unclear",
+                                )
+                                for i in ids
+                            ]
+                        )
+                    )
 
             self.messages = messages
 
@@ -744,8 +945,9 @@ class TestIssue8ScoringDeterminism:
         def batches_for(evs):
             client = self.RecordingClient()
             score_events(evs, self.CONFIG, client)
-            return [re.findall(r'"id": "([^"]+)"', c["messages"][0]["content"])
-                    for c in client.calls]
+            return [
+                re.findall(r'"id": "([^"]+)"', c["messages"][0]["content"]) for c in client.calls
+            ]
 
         assert batches_for(events) == batches_for(shuffled)
 
@@ -760,11 +962,20 @@ class TestIssue8ScoringDeterminism:
                 @staticmethod
                 def parse(**kwargs):
                     ids = re.findall(r'"id": "([^"]+)"', kwargs["messages"][0]["content"])
-                    return SimpleNamespace(parsed_output=ScoreBatch(scores=[
-                        ScoredEvent(id=eid, score=5 + pos, reason="positional",
-                                    kind="hackathon", level="unclear")
-                        for pos, eid in enumerate(ids)
-                    ]))
+                    return SimpleNamespace(
+                        parsed_output=ScoreBatch(
+                            scores=[
+                                ScoredEvent(
+                                    id=eid,
+                                    score=5 + pos,
+                                    reason="positional",
+                                    kind="hackathon",
+                                    level="unclear",
+                                )
+                                for pos, eid in enumerate(ids)
+                            ]
+                        )
+                    )
 
             self.messages = messages
 
@@ -774,8 +985,9 @@ class TestIssue8ScoringDeterminism:
         batching depends on fetch order."""
         events = self._events()
         first = score_events(events, self.CONFIG, self.NeighbourSensitiveClient())
-        second = score_events(list(reversed(self._events())), self.CONFIG,
-                              self.NeighbourSensitiveClient())
+        second = score_events(
+            list(reversed(self._events())), self.CONFIG, self.NeighbourSensitiveClient()
+        )
         assert first == second
 
     def test_batch_size_partitions_all_events_exactly_once(self):
@@ -783,20 +995,26 @@ class TestIssue8ScoringDeterminism:
         client = self.RecordingClient()
         events = self._events(7)
         results = score_events(events, self.CONFIG, client)
-        sent = [i for c in client.calls
-                for i in re.findall(r'"id": "([^"]+)"', c["messages"][0]["content"])]
-        assert len(client.calls) == 3           # 3 + 3 + 1
+        sent = [
+            i
+            for c in client.calls
+            for i in re.findall(r'"id": "([^"]+)"', c["messages"][0]["content"])
+        ]
+        assert len(client.calls) == 3  # 3 + 3 + 1
         assert len(sent) == len(set(sent)) == 7
         assert len(results) == 7
 
     def test_prompt_is_stable_across_runs(self):
         """The whole request, not just temperature, must be byte-identical —
         a drifting prompt would move scores as surely as sampling noise."""
+
         def payloads():
             client = self.RecordingClient()
             score_events(self._events(), self.CONFIG, client)
-            return [(c["model"], c["system"], c["messages"][0]["content"],
-                     c["temperature"]) for c in client.calls]
+            return [
+                (c["model"], c["system"], c["messages"][0]["content"], c["temperature"])
+                for c in client.calls
+            ]
 
         assert payloads() == payloads()
 
@@ -831,18 +1049,28 @@ class TestIssue8ScoringCache:
                 def parse(**kwargs):
                     outer.calls += 1
                     ids = re.findall(r'"id": "([^"]+)"', kwargs["messages"][0]["content"])
-                    return SimpleNamespace(parsed_output=ScoreBatch(scores=[
-                        ScoredEvent(id=i, score=(outer.calls % 10), reason=f"call {outer.calls}",
+                    return SimpleNamespace(
+                        parsed_output=ScoreBatch(
+                            scores=[
+                                ScoredEvent(
+                                    id=i,
+                                    score=(outer.calls % 10),
+                                    reason=f"call {outer.calls}",
                                     kind="networking" if outer.calls % 2 else "hackathon",
-                                    level="unclear")
-                        for i in ids
-                    ]))
+                                    level="unclear",
+                                )
+                                for i in ids
+                            ]
+                        )
+                    )
 
             self.messages = messages
 
     def _events(self):
-        return [make_event(source="devpost", external_id=f"e{i}", title=f"AI Hackathon {i}")
-                for i in range(3)]
+        return [
+            make_event(source="devpost", external_id=f"e{i}", title=f"AI Hackathon {i}")
+            for i in range(3)
+        ]
 
     def test_same_batch_twice_returns_identical_scores_and_kinds(self):
         """The criterion, verbatim — against a client that would otherwise

@@ -53,10 +53,17 @@ jobs:
 
       # Re-enabling ourselves resets GitHub's 60-day inactivity timer, so the
       # schedule survives indefinitely even with no commits.
+      # Best-effort: this only has to succeed occasionally to reset the timer,
+      # so a transient GitHub API error must not fail the job. A failed job
+      # skips actions/cache's post-save step, which rolls back data/ — losing
+      # the run's scoring spend, and potentially re-posting an event that was
+      # already sent. Observed twice on 2026-08-17 (HTTP 503).
       - name: Keepalive
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/radar.yml/enable"
+        run: |
+          gh api -X PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/radar.yml/enable" \
+            || echo "keepalive failed (non-fatal); the 60-day timer resets on a later run"
 
 # vim: ts=2

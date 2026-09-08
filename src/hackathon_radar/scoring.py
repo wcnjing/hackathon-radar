@@ -65,7 +65,7 @@ def _cache_key(model: str, system: str, payload: str) -> str:
 def _cache_load() -> dict:
     try:
         return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except OSError, ValueError:
         return {}  # missing or corrupt: behave as a cold cache, never crash
 
 
@@ -80,6 +80,7 @@ def _cache_store(key: str, scored: list[dict]) -> None:
         CACHE_PATH.write_text(json.dumps(cache), encoding="utf-8")
     except OSError as exc:
         log.warning("could not write score cache: %s", exc)
+
 
 SYSTEM_PROMPT = """You score hackathons and tech events for relevance to a specific audience.
 

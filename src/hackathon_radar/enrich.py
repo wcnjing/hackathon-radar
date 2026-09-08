@@ -72,9 +72,7 @@ def enrich_events(events: list[Event], config: dict, client) -> None:
     import anthropic
 
     model = config.get("scoring", {}).get("model", "claude-haiku-4-5")
-    with httpx.Client(
-        headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True
-    ) as web:
+    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True) as web:
         for event in targets:
             try:
                 _enrich_one(event, web, client, model)

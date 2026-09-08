@@ -2,13 +2,19 @@ import argparse
 import logging
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from hackathon_radar.config import db_path, load_config
 from hackathon_radar.enrich import enrich_events
 from hackathon_radar.filtering import in_scope, normalize_title
-from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
+from hackathon_radar.notify import (
+    Telegram,
+    TelegramError,
+    build_reply_markup,
+    format_message,
+    is_quiet_hour,
+)
 from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
@@ -17,7 +23,7 @@ log = logging.getLogger("radar")
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _iso(dt: datetime) -> str:
@@ -34,7 +40,10 @@ def _collect(config: dict, store: Store):
     new = [e for e in joinable if not store.is_seen(e)]
     log.info(
         "fetched %d, in scope %d, joinable %d, new %d",
-        len(events), len(scoped), len(joinable), len(new),
+        len(events),
+        len(scoped),
+        len(joinable),
+        len(new),
     )
 
     try:
@@ -112,8 +121,12 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
     if last_send:
         elapsed = (_now() - datetime.fromisoformat(last_send)).total_seconds()
         if elapsed < interval:
-            log.info("drip gap not elapsed (%.0fs of %ds); queue depth %d",
-                     elapsed, interval, store.queue_depth())
+            log.info(
+                "drip gap not elapsed (%.0fs of %ds); queue depth %d",
+                elapsed,
+                interval,
+                store.queue_depth(),
+            )
             return 0
 
     day_ago = _iso(_now() - timedelta(days=1))
@@ -142,7 +155,13 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
         local_hour, notify_cfg.get("quiet_start", 23), notify_cfg.get("quiet_end", 8)
     )
     try:
-        telegram.send(format_message(event), silent=silent)
+        telegram.send(
+            format_message(event, team_prompt=notify_cfg.get("team_prompt", False)),
+            silent=silent,
+            reply_markup=build_reply_markup(
+                event, notify_cfg.get("register_button_text", "Register →")
+            ),
+        )
     except TelegramError as exc:
         # Still queued (not marked notified) — retried next run.
         log.error("send failed, will retry next run: %s", exc)
@@ -162,7 +181,8 @@ def _preview(args: argparse.Namespace, config: dict, store: Store) -> int:
         enrich_events(selected, config, client)
     for event in selected:
         score, _ = scores[event.key]
-        print(f"\n--- would queue ({score:.0f}/10) ---\n{format_message(event)}")
+        card = format_message(event, team_prompt=config.get("notify", {}).get("team_prompt", False))
+        print(f"\n--- would queue ({score:.0f}/10) ---\n{card}")
     log.info("%d event(s) would be queued (dry run)", len(selected))
     return 0
 
@@ -242,7 +262,9 @@ def test_telegram(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     # httpx logs full request URLs at INFO; Telegram URLs embed the bot token.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(prog="radar", description="Hackathon & event notifier")
