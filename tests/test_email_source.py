@@ -1,5 +1,7 @@
 from email.message import EmailMessage
 
+import pytest
+
 from hackathon_radar.sources import email_source
 from hackathon_radar.sources.email_source import body_text, new_uids, to_event
 from hackathon_radar.sources.watchlist import PageEvent
@@ -126,6 +128,26 @@ class TestToEvent:
 
     def test_linkless_event_skipped(self):
         assert to_event(page_event(title="Vague Event", url=None), "<m@x>", "SG") is None
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "mailto:organizer@example.com",
+            "javascript:alert(1)",
+            "ftp://files.example.org/flyer.pdf",
+            "www.example.org/event",  # schemeless: no page here to resolve against
+            "",
+        ],
+    )
+    def test_event_with_unopenable_link_skipped(self, url):
+        """The emptiness check let these through: they are all truthy (bar the
+        empty string) but none of them opens anywhere a subscriber can go, and
+        an email has no page to fall back to the way the watchlist does."""
+        assert to_event(page_event(title="Sketchy Event", url=url), "<m@x>", "SG") is None
+
+    def test_ordinary_link_still_accepted(self):
+        for url in ("https://x.example/e", "http://x.example/e"):
+            assert to_event(page_event(title="Real Event", url=url), "<m@x>", "SG").url == url
 
 
 class TestFetchGuards:

@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from hackathon_radar.config import PROJECT_ROOT
 from hackathon_radar.enrich import _page_text
-from hackathon_radar.filtering import normalize_title
+from hackathon_radar.filtering import is_usable_url, normalize_title
 from hackathon_radar.models import Event
 
 log = logging.getLogger(__name__)
@@ -72,11 +72,40 @@ def _save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, indent=1))
 
 
+def _resolve_url(raw: str | None, page_url: str) -> str:
+    """The event's own link when it resolves to something usable, else the page.
+
+    `urljoin` is not a validator. It passes an absolute non-http(s) scheme
+    straight through (`mailto:a@b` stays `mailto:a@b`), and it buries a
+    schemeless domain under the page's own path (`www.foo.org/e` becomes
+    `<page>/www.foo.org/e`, a silent 404 that still looks like a valid URL).
+
+    Falling back rather than skipping: `page_url` comes from trusted config and
+    is a real, informative link, so an unusable event link degrades to it — the
+    same thing that already happens when a page gives no per-event link at all.
+    """
+    if not raw:
+        return page_url
+    # A relative path starting with "www." is a domain whose scheme the
+    # extractor dropped. Caught before urljoin, which would otherwise hide it
+    # behind a URL that passes every later check. Deliberately narrow: real
+    # relative paths do start with dots ("index.html", "assets/v1.2/x"), so a
+    # broader domain-shaped test would reject working links.
+    if raw.startswith("www."):
+        log.info("watchlist event link %r is a schemeless domain; using the page", raw)
+        return page_url
+    joined = urljoin(page_url, raw)
+    if not is_usable_url(joined):
+        log.info("watchlist event link %r is not openable; using the page", raw)
+        return page_url
+    return joined
+
+
 def to_event(pe: PageEvent, page_url: str, assume_country: str) -> Event | None:
     title = pe.title.strip()
     if not title:
         return None
-    url = urljoin(page_url, pe.url) if pe.url else page_url
+    url = _resolve_url(pe.url, page_url)
     return Event(
         source="watchlist",
         # The page may not give events stable links, so key on page + title.
