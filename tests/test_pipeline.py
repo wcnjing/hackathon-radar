@@ -719,3 +719,172 @@ class TestTelegramErrors:
             telegram.send("hello")
         assert "Forbidden: bot is not a member" in str(excinfo.value)
         assert "SECRETTOKENVALUE" not in str(excinfo.value)
+
+    def _raising(self, monkeypatch, exc):
+        from hackathon_radar import notify
+
+        def boom(*a, **k):
+            raise exc
+
+        monkeypatch.setattr(notify.httpx, "post", boom)
+        return Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+
+    def test_connect_error_becomes_telegram_error(self, monkeypatch):
+        """A transport failure must reach the caller as TelegramError, so the
+        send site leaves the event queued instead of crashing the whole run."""
+        import httpx
+        import pytest
+
+        telegram = self._raising(monkeypatch, httpx.ConnectError("getaddrinfo failed"))
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "ConnectError" in str(excinfo.value)
+
+    def test_read_timeout_becomes_telegram_error(self, monkeypatch):
+        """Caught by the httpx.RequestError base class, not one named subclass."""
+        import httpx
+        import pytest
+
+        telegram = self._raising(monkeypatch, httpx.ReadTimeout("timed out"))
+        with pytest.raises(TelegramError):
+            telegram.send("hello")
+
+    def test_transport_error_never_leaks_the_token(self, monkeypatch):
+        """httpx quotes the request URL in some transport errors, and the token
+        is a path segment of every Telegram API URL."""
+        import httpx
+        import pytest
+
+        leaky = httpx.ConnectError(
+            "failed connecting to https://api.telegram.org/bot123456:SECRETTOKENVALUE/sendMessage"
+        )
+        telegram = self._raising(monkeypatch, leaky)
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "SECRETTOKENVALUE" not in str(excinfo.value)
+        assert "***" in str(excinfo.value)
+
+    def test_transport_error_never_leaks_the_token_through_the_traceback(self, monkeypatch):
+        """Redacting the message is not enough: `from exc` would keep the raw
+        httpx error as __cause__, and Python prints a chained exception in full,
+        putting the unredacted token directly above the redacted copy."""
+        import traceback
+
+        import httpx
+        import pytest
+
+        leaky = httpx.ConnectError(
+            "failed connecting to https://api.telegram.org/bot123456:SECRETTOKENVALUE/sendMessage"
+        )
+        telegram = self._raising(monkeypatch, leaky)
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        rendered = "".join(traceback.format_exception(excinfo.value))
+        assert "SECRETTOKENVALUE" not in rendered
+        # The chain is what would carry it back in; pin it directly so a future
+        # `from exc` fails here rather than only in a rendered traceback.
+        assert excinfo.value.__cause__ is None
+
+    def test_non_string_description_still_raises_telegram_error(self, monkeypatch):
+        """`data` is unvalidated JSON from the network — a proxy error page that
+        parses as an object with a falsy `ok` reaches the redaction. A raw
+        AttributeError there would escape _drain's `except TelegramError` and
+        kill the run: the exact failure this class exists to prevent."""
+        import pytest
+
+        from hackathon_radar import notify
+
+        class FakeResponse:
+            status_code = 429
+
+            def json(self):
+                return {"ok": False, "description": {"code": 429}}
+
+        monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: FakeResponse())
+        telegram = Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "429" in str(excinfo.value)
+
+    @pytest.mark.parametrize("body", [[], None, "Service Unavailable", 42])
+    def test_non_object_json_body_still_raises_telegram_error(self, monkeypatch, body):
+        """A proxy or CDN can return valid JSON that is not an object. That
+        reaches .get() as an AttributeError, which is not a TelegramError, so it
+        escapes the caller's handler and kills the run."""
+        from hackathon_radar import notify
+
+        class FakeResponse:
+            status_code = 503
+
+            def json(self):
+                return body
+
+        monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: FakeResponse())
+        telegram = Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "503" in str(excinfo.value)
+
+    def test_ok_without_result_still_raises_telegram_error(self, monkeypatch):
+        """`data["result"]` raised KeyError on a truthy `ok` with no result."""
+        from hackathon_radar import notify
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True}
+
+        monkeypatch.setattr(notify.httpx, "post", lambda *a, **k: FakeResponse())
+        telegram = Telegram(token="123456:SECRETTOKENVALUE", chat_id="@chan")
+        with pytest.raises(TelegramError):
+            telegram.send("hello")
+
+    @pytest.mark.parametrize("stray", [chr(10), chr(9), " "])
+    def test_token_with_stray_whitespace_does_not_raise_invalid_url(self, monkeypatch, stray):
+        """A secret pasted into GitHub Secrets commonly carries a trailing
+        newline. httpx.InvalidURL subclasses Exception, not RequestError, so it
+        escaped every `except TelegramError` and dumped a stack trace."""
+        from hackathon_radar import notify
+
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "result": {}}
+
+        def fake_post(url, **k):
+            captured["url"] = url
+            return FakeResponse()
+
+        monkeypatch.setattr(notify.httpx, "post", fake_post)
+        # Without the strip, httpx raises InvalidURL here — not a RequestError,
+        # so it escapes every `except TelegramError` in cli.py.
+        Telegram(token="123456:SECRETTOKENVALUE" + stray, chat_id="@chan").send("hello")
+        assert captured["url"].endswith("/bot123456:SECRETTOKENVALUE/sendMessage")
+
+    def test_unusable_token_reports_instead_of_escaping(self):
+        """strip() only reaches the ends: a non-printable *inside* the token
+        still makes httpx raise InvalidURL, which subclasses Exception rather
+        than RequestError and so escapes every `except TelegramError`."""
+        telegram = Telegram(token="123456:SEC" + chr(10) + "RET", chat_id="@chan")
+        with pytest.raises(TelegramError) as excinfo:
+            telegram.send("hello")
+        assert "InvalidURL" in str(excinfo.value)
+
+    def test_get_chat_id_reports_a_transport_failure_instead_of_raising(self, monkeypatch):
+        """get-chat-id is run by hand during setup, and main() has no top-level
+        handler — an unreachable API must print one error line, not a traceback."""
+        import httpx
+
+        from hackathon_radar import cli, notify
+
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:SECRETTOKENVALUE")
+
+        def boom(*a, **k):
+            raise httpx.ConnectError("getaddrinfo failed")
+
+        monkeypatch.setattr(notify.httpx, "post", boom)
+        assert cli.get_chat_id(argparse.Namespace()) == 1
