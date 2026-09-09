@@ -2,13 +2,15 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from hackathon_radar.sources import devpost, luma, mlh
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_devpost_parse():
-    data = json.loads((FIXTURES / "devpost.json").read_text())
+    data = json.loads((FIXTURES / "devpost.json").read_text(encoding="utf-8"))
     events = devpost.parse_response(data)
     assert events, "fixture should yield events"
 
@@ -45,7 +47,7 @@ def test_devpost_skips_closed_and_flags_invite_only():
 
 
 def test_mlh_parse():
-    html = (FIXTURES / "mlh2027.html").read_text()
+    html = (FIXTURES / "mlh2027.html").read_text(encoding="utf-8")
     events = mlh.parse_season_page(html)
     assert len(events) > 30, "season page should have many events"
 
@@ -64,7 +66,7 @@ def test_mlh_parse():
 
 
 def test_luma_parse():
-    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    data = json.loads((FIXTURES / "luma_api.json").read_text(encoding="utf-8"))
     events = [e for e in (luma.parse_entry(entry) for entry in data["entries"]) if e]
     assert len(events) > 30, "SG discover feed should have many events"
 
@@ -75,7 +77,7 @@ def test_luma_parse():
     assert first.country == "SG"
     assert first.online is False
     assert first.starts_at and "T" in first.starts_at
-    assert first.dates_text  # e.g. "Tue Jul 7, 6:30 PM" (in event's own timezone)
+    assert first.dates_text == "Tue Jul 7, 6:30 PM"
 
     assert any(e.organizer for e in events), "host names should come through"
 
@@ -86,7 +88,7 @@ def test_luma_parse_entry_skips_malformed():
 
 
 def test_luma_flags_full_events():
-    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    data = json.loads((FIXTURES / "luma_api.json").read_text(encoding="utf-8"))
     by_id = {}
     for entry in data["entries"]:
         ev = luma.parse_entry(entry)
@@ -105,7 +107,7 @@ def test_luma_kind_heuristic():
     assert luma.parse_entry(entry("Daytona HackSprint")).kind == "hackathon"
     assert luma.parse_entry(entry("AI Buildathon Night")).kind == "hackathon"
     assert luma.parse_entry(entry("Founders' Breakfast")).kind == "networking"
-    # "jam" needs word boundaries — "Jamie's Talk" is not a game jam
+    # "jam" needs word boundaries â€” "Jamie's Talk" is not a game jam
     assert luma.parse_entry(entry("Jamie's Fireside Chat")).kind == "networking"
 
 
@@ -119,3 +121,24 @@ def test_mlh_upcoming_filter():
     today = date(2026, 7, 7)
     assert not mlh._upcoming(past, today)
     assert mlh._upcoming(future, today)
+
+
+@pytest.mark.parametrize(
+    ("stamp", "tz", "expected"),
+    [
+        ("2026-07-07T00:00:00Z", None, "Tue Jul 7, 12:00 AM"),
+        ("2026-07-07T12:00:00Z", "UTC", "Tue Jul 7, 12:00 PM"),
+        ("2026-07-07T01:05:00Z", None, "Tue Jul 7, 1:05 AM"),
+        ("2026-07-06T16:00:00Z", "Asia/Singapore", "Tue Jul 7, 12:00 AM"),
+        ("2026-07-07T00:00:00Z", "Australia/Eucla", "Tue Jul 7, 8:45 AM"),
+    ],
+)
+def test_luma_format_start(stamp, tz, expected):
+    assert luma._format_start(stamp, tz) == expected
+
+
+def test_mlh_date_format():
+    html = (FIXTURES / "mlh2027.html").read_text(encoding="utf-8")
+    events = mlh.parse_season_page(html)
+    assert all(event.dates_text for event in events)
+    assert events[0].dates_text == "Aug 29 - Aug 30, 2026"

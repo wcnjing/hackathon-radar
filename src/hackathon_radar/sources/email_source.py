@@ -49,14 +49,14 @@ is_online (true for virtual events)."""
 
 def _load_state() -> dict:
     try:
-        return json.loads(STATE_PATH.read_text())
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except OSError, ValueError:
         return {}
 
 
 def _save_state(state: dict) -> None:
     STATE_PATH.parent.mkdir(exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=1))
+    STATE_PATH.write_text(json.dumps(state, indent=1), encoding="utf-8")
 
 
 def body_text(msg: email.message.EmailMessage, limit: int = 6_000) -> str:

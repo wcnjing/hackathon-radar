@@ -43,7 +43,7 @@ def parse_season_page(html: str) -> list[Event]:
             try:
                 s = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
                 e = datetime.fromisoformat(ends_at.replace("Z", "+00:00"))
-                dates_text = f"{s:%b %-d} - {e:%b %-d, %Y}"
+                dates_text = f"{s:%b} {s.day} - {e:%b} {e.day}, {e:%Y}"
             except ValueError:
                 pass
 

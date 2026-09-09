@@ -13,6 +13,8 @@ dependencies = [
     "httpx>=0.28.1",
     "pypdf>=6.14.2",
     "python-dotenv>=1.2.2",
+    # Windows does not ship a system timezone database.
+    "tzdata>=2026.3 ; sys_platform == 'win32'",
 ]
 
 [project.scripts]
@@ -35,7 +37,7 @@ line-length = 100
 
 [tool.ruff.lint]
 # Pinned explicitly rather than inheriting ruff's defaults, which widen between
-# releases — a formatter that changes its mind on upgrade is worse than none.
+# releases â€” a formatter that changes its mind on upgrade is worse than none.
 #   E4/E7/E9, F  real problems: unused imports, undefined names, broken syntax
 #   I            import sorting, the usual source of pointless review churn
 #   B            bugbear, e.g. mutable default arguments

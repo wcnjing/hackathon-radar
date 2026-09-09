@@ -62,14 +62,14 @@ class PageEvents(BaseModel):
 
 def _load_state() -> dict:
     try:
-        return json.loads(STATE_PATH.read_text())
+        return json.loads(STATE_PATH.read_text(encoding="utf-8"))
     except OSError, ValueError:
         return {}
 
 
 def _save_state(state: dict) -> None:
     STATE_PATH.parent.mkdir(exist_ok=True)
-    STATE_PATH.write_text(json.dumps(state, indent=1))
+    STATE_PATH.write_text(json.dumps(state, indent=1), encoding="utf-8")
 
 
 def to_event(pe: PageEvent, page_url: str, assume_country: str) -> Event | None:

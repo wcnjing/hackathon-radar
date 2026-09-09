@@ -65,7 +65,11 @@ def _format_start(starts_at: str | None, tz: str | None) -> str:
         dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
         if tz:
             dt = dt.astimezone(ZoneInfo(tz))
-        return f"{dt:%a %b %-d, %-I:%M %p}"
+        # ``%-d`` and ``%-I`` suppress leading zeroes on Unix, but those
+        # directives are unsupported on Windows. Build the two integers
+        # directly so formatting stays portable.
+        hour = dt.hour % 12 or 12
+        return f"{dt:%a %b} {dt.day}, {hour}:{dt:%M %p}"
     except Exception:
         return ""
 
