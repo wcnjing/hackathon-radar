@@ -8,7 +8,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_devpost_parse():
-    data = json.loads((FIXTURES / "devpost.json").read_text())
+    data = json.loads((FIXTURES / "devpost.json").read_text(encoding="utf-8"))
     events = devpost.parse_response(data)
     assert events, "fixture should yield events"
 
@@ -45,7 +45,7 @@ def test_devpost_skips_closed_and_flags_invite_only():
 
 
 def test_mlh_parse():
-    html = (FIXTURES / "mlh2027.html").read_text()
+    html = (FIXTURES / "mlh2027.html").read_text(encoding="utf-8")
     events = mlh.parse_season_page(html)
     assert len(events) > 30, "season page should have many events"
 
@@ -64,7 +64,7 @@ def test_mlh_parse():
 
 
 def test_luma_parse():
-    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    data = json.loads((FIXTURES / "luma_api.json").read_text(encoding="utf-8"))
     events = [e for e in (luma.parse_entry(entry) for entry in data["entries"]) if e]
     assert len(events) > 30, "SG discover feed should have many events"
 
@@ -86,7 +86,7 @@ def test_luma_parse_entry_skips_malformed():
 
 
 def test_luma_flags_full_events():
-    data = json.loads((FIXTURES / "luma_api.json").read_text())
+    data = json.loads((FIXTURES / "luma_api.json").read_text(encoding="utf-8"))
     by_id = {}
     for entry in data["entries"]:
         ev = luma.parse_entry(entry)
