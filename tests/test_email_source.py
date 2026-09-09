@@ -1,8 +1,13 @@
+import json
 from email.message import EmailMessage
+from pathlib import Path
+from types import SimpleNamespace
 
 from hackathon_radar.sources import email_source
 from hackathon_radar.sources.email_source import body_text, new_uids, to_event
 from hackathon_radar.sources.watchlist import PageEvent
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def page_event(**overrides) -> PageEvent:
@@ -124,8 +129,59 @@ class TestToEvent:
         pe = page_event(title="NYC Datathon", url="https://x.example", country_code="US")
         assert to_event(pe, "<m@x>", "SG").country == "US"
 
+    def test_explicit_audience_restriction_carries(self):
+        pe = page_event(title="NUS Hack Day", url="https://x.example", open_to="NUS students only")
+        assert to_event(pe, "<m@x>", "SG").open_to == "NUS students only"
+
+    def test_unrestricted_event_defaults_to_none(self):
+        pe = page_event(title="Open Hack Day", url="https://x.example")
+        assert to_event(pe, "<m@x>", "SG").open_to is None
+
     def test_linkless_event_skipped(self):
         assert to_event(page_event(title="Vague Event", url=None), "<m@x>", "SG") is None
+
+
+class TestEligibilityExtraction:
+    def test_offline_email_fixtures(self):
+        cases = json.loads((FIXTURES / "email_eligibility.json").read_text(encoding="utf-8"))
+
+        class FakeMessages:
+            def __init__(self, case, seen):
+                self.case = case
+                self.seen = seen
+
+            def parse(self, **kwargs):
+                prompt = kwargs["messages"][0]["content"][-1]["text"]
+                self.seen["prompt"] = prompt
+                assert self.case["body"] in prompt
+                parsed = email_source.PageEvents(
+                    events=[
+                        page_event(
+                            title=self.case["title"],
+                            url=self.case["url"],
+                            open_to=self.case["expected_open_to"],
+                        )
+                    ]
+                )
+                return SimpleNamespace(parsed_output=parsed)
+
+        for case in cases:
+            seen = {}
+            client = SimpleNamespace(messages=FakeMessages(case, seen))
+            extracted = email_source._extract(
+                client,
+                "test-model",
+                case["body"],
+                case["title"],
+                case["sender"],
+            )
+
+            assert extracted[0].open_to == case["expected_open_to"], case["name"]
+            event = to_event(extracted[0], f"<{case['name']}@test>", "SG")
+            assert event.open_to == case["expected_open_to"], case["name"]
+            prompt = " ".join(seen["prompt"].split())
+            assert 'Statements such as "open to all students" are not restrictions' in prompt
+            assert "Never infer eligibility from the sender, organizer, or school name" in prompt
 
 
 class TestFetchGuards:

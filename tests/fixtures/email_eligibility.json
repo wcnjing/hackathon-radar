@@ -1,0 +1,26 @@
+[
+  {
+    "name": "restricted",
+    "title": "NUS Builders Hack Day",
+    "url": "https://events.example/nus-builders",
+    "sender": "NUS Computing Club <club@example.edu>",
+    "body": "NUS Builders Hack Day is on 20 September. Participation is limited to current NUS students only. Details: https://events.example/nus-builders",
+    "expected_open_to": "NUS students only"
+  },
+  {
+    "name": "unrestricted",
+    "title": "Singapore Student Hack Day",
+    "url": "https://events.example/student-hack-day",
+    "sender": "Events Team <events@example.org>",
+    "body": "Singapore Student Hack Day is on 21 September. Details: https://events.example/student-hack-day",
+    "expected_open_to": null
+  },
+  {
+    "name": "open-to-all",
+    "title": "Open Campus Buildathon",
+    "url": "https://events.example/open-buildathon",
+    "sender": "NTU Innovation <innovation@example.edu>",
+    "body": "Open Campus Buildathon is on 22 September and is open to all students. Details: https://events.example/open-buildathon",
+    "expected_open_to": null
+  }
+]

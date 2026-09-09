@@ -54,6 +54,7 @@ class PageEvent(BaseModel):
     location: str | None
     country_code: str | None
     is_online: bool
+    open_to: str | None = None
 
 
 class PageEvents(BaseModel):

@@ -44,7 +44,11 @@ filler. If the email announces no events, return an empty list.
 For each event: title; url (the best public detail link from the email, null if none);
 dates_text (dates as written, null if none); location (null if not stated);
 country_code (two-letter code when clear from the text, null otherwise);
-is_online (true for virtual events)."""
+is_online (true for virtual events); open_to (a short eligibility restriction in
+the source's own words, null unless the email explicitly restricts who may
+participate). Statements such as "open to all students" are not restrictions and
+must produce null. Never infer eligibility from the sender, organizer, or school
+name."""
 
 
 def _load_state() -> dict:
@@ -166,6 +170,7 @@ def to_event(pe: PageEvent, message_id: str, assume_country: str) -> Event | Non
         location=pe.location or "",
         online=pe.is_online,
         country=pe.country_code or assume_country or None,
+        open_to=pe.open_to,
     )
 
 
