@@ -555,12 +555,20 @@ class TestAgainstTheRealConfig:
     @pytest.mark.parametrize(
         "title",
         [
+            # every title the review named as wrongly blocked
             "AI Agents Hackathon 2026",
+            "Anthropic Builder Workshop Singapore",
+            "Women Who Code Workshop: LLM Fine-tuning",
+            "AI Singapore Apprenticeship Programme",
+            "AWS DeepRacer Student League",
+            "Build with AI: Gemini Developer Day",
             "NUS Datathon 2026",
             "Hack&Roll 2026",
+            # and a few more of the same shape
             "GenAI Buildathon SG",
-            "Anthropic Builder Workshop Singapore",
-            "AI Singapore Apprenticeship Programme",
+            "MHacks 2026",
+            "Social Impact Hackathon 2026",
+            "Antler Residency",
         ],
     )
     def test_wanted_events_still_post_under_the_shipped_config(self, real, title):
@@ -568,6 +576,15 @@ class TestAgainstTheRealConfig:
         events the profile explicitly asks for. Guard the other direction too."""
         posts, kind, score = self._outcome(make_event(title=title, location="Singapore"), real)
         assert posts, f"{title!r} blocked at {score} as {kind!r}"
+
+    def test_the_build_boundary_separates_building_from_mingling(self, real):
+        """`build` is what lets "Build with AI" through. Its closing
+        boundary is what keeps "AI Builders Mixer" out. Both halves matter, so
+        both are asserted together -- widening one silently breaks the other."""
+        builds, _, _ = self._outcome(make_event(title="Build with AI: Gemini Day"), real)
+        mingles, kind, score = self._outcome(make_event(title="AI Builders Mixer & Demo Day"), real)
+        assert builds is True
+        assert mingles is False, f"a mixer posted at {score} as {kind!r}"
 
 
 # ---------------------------------------------------------------------------

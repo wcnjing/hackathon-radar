@@ -31,9 +31,13 @@ PROGRAM_TITLE_RE = re.compile(
 # Every other alternative is `\b`-anchored on both sides. An unanchored `sprint`
 # used to classify "Sprinter Van Expo" as a hackathon, which is the kind of
 # false positive that erodes trust in the whole fallback.
+#
+# `\bbuild\b` is what makes "Build with AI: Gemini Developer Day" read as a
+# build event. Its closing `\b` is load-bearing: it does not match "Builders",
+# so "AI Builders Mixer" stays networking and issue #4's bar still holds.
 HACKATHON_TITLE_RE = re.compile(
     r"hacka|hacks\b|\bhack\b|\bbuildathon\b|\bbuild-a-thon\b|\bdatathon\b|"
-    r"\bsprint\b|\bjam\b|\bworkshop\b|\bleague\b|"
+    r"\bsprint\b|\bjam\b|\bworkshop\b|\bleague\b|\bbuild\b|"
     r"\b(challenge|competition|contest)\b",
     re.I,
 )

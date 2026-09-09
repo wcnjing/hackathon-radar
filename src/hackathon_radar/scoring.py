@@ -81,8 +81,11 @@ def _cache_key(model: str, system: str, payload: str) -> str:
 def _cache_load() -> dict:
     try:
         return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-    # PEP 758: unparenthesized `except` tuples are valid on 3.14, and ruff's UP
-    # ruleset rewrites the parenthesized form. This is `except (OSError, ValueError)`.
+    # Reads like Python 2 but is valid here: PEP 758 (3.14) permits
+    # unparenthesized `except` tuples, and requires-python is ">=3.14". The
+    # parentheses cannot be kept for readability -- `ruff format` strips them,
+    # and `ruff format --check` is a CI gate. (It is the formatter that does
+    # this, not the UP lint rule; `ruff check` accepts either form.)
     except OSError, ValueError:
         return {}  # missing or corrupt: behave as a cold cache, never crash
 

@@ -9,6 +9,7 @@ import pytest
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     classify_kind,
+    classify_kind_with_signal,
     in_scope,
     keyword_score,
     normalize_title,
@@ -886,10 +887,30 @@ class TestIssue4KeywordFallbackKind:
             assert classify_kind(make_event(title=title)) == "hackathon", title
 
     def test_word_boundaries_hold(self):
-        """The tier regexes are anchored: no substring false positives."""
-        # "jam" must not fire inside "pyjamas"; "hack" is a prefix match by design
-        assert classify_kind(make_event(title="Pyjamas Party")) == "networking"
-        assert classify_kind(make_event(title="Hackathon Kickoff")) == "hackathon"
+        """The tier regexes are anchored: no substring false positives.
+
+        Asserting the *kind* alone could not show this. "networking" is also the
+        ambiguous default, so `classify_kind("Pyjamas Party") == "networking"`
+        passed whether the boundary held or the title matched nothing at all.
+        `classify_kind_with_signal` separates the two: `matched is False` is the
+        claim that no rule fired.
+        """
+        for title in ("Pyjamas Party", "Hackney Community Day"):
+            kind, matched = classify_kind_with_signal(make_event(title=title))
+            assert matched is False, f"{title!r} matched a rule and became {kind!r}"
+
+        # "Sprinter Van Expo" does match -- on "expo", as networking, which is
+        # right. The regression is the unanchored `sprint` calling it a
+        # hackathon, so assert the kind here rather than the absence of a match.
+        assert classify_kind(make_event(title="Sprinter Van Expo")) == "networking"
+
+        for title, expected in (
+            ("Hackathon Kickoff", "hackathon"),
+            ("Global Game Jam", "hackathon"),
+            ("GenAI Buildathon", "hackathon"),
+        ):
+            kind, matched = classify_kind_with_signal(make_event(title=title))
+            assert (kind, matched) == (expected, True)
 
 
 class TestIssue8ScoringDeterminism:
