@@ -32,13 +32,14 @@ jobs:
         with:
           enable-cache: true
 
-      # Restore the newest seen-events DB; the unique key means the updated
-      # DB is saved back at the end of every run.
+      # Restore the newest seen-events DB. Restore and save are separate so a
+      # failed radar run can still persist any committed DB/state-file writes.
+      # run_attempt keeps the save key unique when a failed workflow is rerun.
       - name: Restore seen-events database
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: data
-          key: radar-db-${{ github.run_id }}
+          key: radar-db-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: radar-db-
 
       - name: Run radar
@@ -51,13 +52,18 @@ jobs:
           RADAR_FORCE_FETCH: ${{ inputs.force_fetch && '1' || '' }}
         run: uv run radar run
 
+      - name: Save seen-events database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: radar-db-${{ github.run_id }}-${{ github.run_attempt }}
+
       # Re-enabling ourselves resets GitHub's 60-day inactivity timer, so the
       # schedule survives indefinitely even with no commits.
       # Best-effort: this only has to succeed occasionally to reset the timer,
-      # so a transient GitHub API error must not fail the job. A failed job
-      # skips actions/cache's post-save step, which rolls back data/ — losing
-      # the run's scoring spend, and potentially re-posting an event that was
-      # already sent. Observed twice on 2026-08-17 (HTTP 503).
+      # so a transient GitHub API error must not fail the job. The explicit
+      # save step above persists data/ even when this or the radar step fails.
       - name: Keepalive
         if: always()
         env:

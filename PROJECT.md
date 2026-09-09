@@ -116,10 +116,11 @@ guard, cap) → enrichment (Devpost pages: team size, deadline, expandable brief
 keyword-scorer fallback when the API is unavailable.
 
 **Infra:** GitHub Actions (private repo), `concurrency` group serializes runs,
-SQLite + JSON state persisted via actions/cache, secrets for all credentials,
-keepalive step defeats the 60-day schedule auto-disable, `force_fetch`
-dispatch input for on-demand sweeps. Cards are public-friendly: scores and
-relevance reasons stay in the DB.
+SQLite + JSON state persisted via explicit actions/cache restore/save steps
+(the save runs even after failure), secrets for all credentials, keepalive step
+defeats the 60-day schedule auto-disable, `force_fetch` dispatch input for
+on-demand sweeps. Cards are public-friendly: scores and relevance reasons stay
+in the DB.
 
 ## Build / test / operate
 
@@ -182,8 +183,6 @@ action, not routine.
 ## Known gaps & open risks (from the 2026-07-10 code review; honest list)
 
 - **Dry-run mutates source state** (watchlist hashes, email UID) — see caveat above
-- **actions/cache saves only on job success** — a failed run rolls back the
-  DB: re-spend on the next run, and a sent-but-rolled-back event would re-post
 - **Queued payloads embed the Event schema** — renaming/removing an Event field
   while events sit queued would crash drain until the cache is cleared
 - **No queue staleness check** — under sustained cap pressure an event could
