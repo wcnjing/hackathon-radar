@@ -165,8 +165,9 @@ action, not routine.
   per-event country inference so NY events don't pass the SG filter; JS-only
   pages detected and rejected as watchlist candidates
 - **Email:** app-password spaces stripped; plain-vs-HTML part chosen by link
-  presence; linkless events skipped (non-actionable) — now rare since links
-  survive extraction; per-message failure doesn't kill the batch; IMAP `UID n:*`
+  presence; events without a usable link skipped (non-actionable) — not just
+  missing ones: `mailto:` and `javascript:` values are truthy but unopenable;
+  per-message failure doesn't kill the batch; IMAP `UID n:*`
   returns-last-message quirk filtered
 - **Delivery:** Telegram HTML escaping (incl. inside expandable quotes); errors
   never contain the token (it's embedded in API URLs); send-then-record
@@ -203,6 +204,11 @@ action, not routine.
 - **Scores/reasons backend-only** — public channel gets factual cards
 - **Networking threshold 8 vs 6** — actionable > attendable, enforced in code
 - **Internships excluded** — dated-event-only policy; sibling channel if ever
-- **Linkless events skipped** — a card pointing nowhere burns trust
+- **Events without a *usable* link skipped** — a card pointing nowhere burns
+  trust, and `mailto:`/`javascript:`/schemeless values point nowhere just as
+  surely as a missing one. Checked at ingest, where the event can still be
+  dropped or degraded, not only at send time. The watchlist falls back to the
+  page the event was found on rather than skipping, because that page is a real
+  link; email has no such fallback
 - **Most informative public link wins** — the card's job is to get a student to
   a decision, not to send them straight into a signup wall

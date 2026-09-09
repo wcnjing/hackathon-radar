@@ -6,6 +6,7 @@ import pytest
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     in_scope,
+    is_usable_url,
     keyword_score,
     normalize_title,
 )
@@ -73,6 +74,33 @@ class TestKeywordScore:
         event = make_event(title="Sustainability Workshop", location="TRAINOCATE Pte Ltd")
         score, reason = keyword_score(event, self.INTERESTS)
         assert reason == KEYWORD_REASON_PREFIX + "none matched"
+
+
+class TestUsableUrl:
+    """One definition of "usable", shared by ingest and the card builder, so a
+    source and notify.py cannot disagree about what a subscriber can open."""
+
+    @pytest.mark.parametrize("url", ["https://x.org/e", "http://x.org/e", "https://x.org"])
+    def test_absolute_http_urls_are_usable(self, url):
+        assert is_usable_url(url)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            None,
+            "",
+            "mailto:a@b.com",
+            "javascript:alert(1)",
+            "ftp://x.org/f",
+            "www.foo.org/e",
+            "/relative/path",
+            "data:text/html,<b>x</b>",
+        ],
+    )
+    def test_everything_else_is_not(self, url):
+        # Each non-empty case here is truthy, which is why the original
+        # `if not url` checks let them through.
+        assert not is_usable_url(url)
 
 
 class TestStore:

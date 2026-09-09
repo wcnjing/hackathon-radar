@@ -5,6 +5,7 @@ import os
 
 import httpx
 
+from hackathon_radar.filtering import is_usable_url
 from hackathon_radar.models import Event
 
 API_BASE = "https://api.telegram.org/bot{token}"
@@ -74,12 +75,15 @@ def build_reply_markup(event: Event, label: str) -> dict | None:
     forever. Both sources that build `url` from an LLM reading untrusted input
     (email bodies, arbitrary web pages) can produce such a URL, so anything
     unusable degrades to no button rather than a failed send.
+
+    This stays a backstop even though ingest now rejects unusable URLs too: it
+    is what guarantees the queue cannot stall, and it should not depend on every
+    current and future source getting ingest right.
     """
     label = (label or "").strip()
-    url = event.url or ""
-    if not label or not url.startswith(("https://", "http://")):
+    if not label or not is_usable_url(event.url):
         return None
-    return {"inline_keyboard": [[{"text": label, "url": url}]]}
+    return {"inline_keyboard": [[{"text": label, "url": event.url}]]}
 
 
 def is_quiet_hour(hour: int, start: int, end: int) -> bool:

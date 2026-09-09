@@ -25,6 +25,18 @@ def normalize_title(title: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
 
 
+def is_usable_url(url: str | None) -> bool:
+    """True when `url` is an absolute http(s) link a subscriber can open.
+
+    One definition of "usable", shared by ingest and send, so a source and the
+    card builder cannot disagree about what counts. Both LLM-backed sources
+    build URLs from untrusted input (email bodies, arbitrary web pages), so
+    `mailto:`, `javascript:` and `ftp://` values are reachable rather than
+    theoretical — and each is truthy, so an emptiness check does not catch them.
+    """
+    return bool(url) and url.startswith(("https://", "http://"))
+
+
 # Reasons carrying this prefix are debug detail for the database; the Telegram
 # message suppresses them (only Claude's "why you'd care" lines are shown).
 KEYWORD_REASON_PREFIX = "keywords: "

@@ -19,7 +19,7 @@ from datetime import date
 
 from hackathon_radar.config import PROJECT_ROOT
 from hackathon_radar.enrich import _page_text
-from hackathon_radar.filtering import normalize_title
+from hackathon_radar.filtering import is_usable_url, normalize_title
 from hackathon_radar.models import Event
 from hackathon_radar.sources.watchlist import PageEvent, PageEvents
 
@@ -151,11 +151,12 @@ def new_uids(uids: list[int], last_seen: int) -> list[int]:
 
 def to_event(pe: PageEvent, message_id: str, assume_country: str) -> Event | None:
     title = pe.title.strip()
-    if not title or not pe.url:
-        # An event card without a link isn't actionable; skip rather than
-        # point subscribers at nothing.
+    if not title or not is_usable_url(pe.url):
+        # An event card without a link a subscriber can open isn't actionable;
+        # skip rather than point them at nothing. There is no page to fall back
+        # to here the way the watchlist has one — an email is not a web page.
         if title:
-            log.info("email event %r has no link; skipped", title)
+            log.info("email event %r has no usable link (%r); skipped", title, pe.url)
         return None
     return Event(
         source="email",

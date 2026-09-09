@@ -1,3 +1,5 @@
+import pytest
+
 from hackathon_radar.sources import watchlist
 from hackathon_radar.sources.watchlist import PageEvent, to_event
 
@@ -49,6 +51,36 @@ class TestToEvent:
 
     def test_blank_title_dropped(self):
         assert to_event(page_event(title="  "), "https://x.org/", "SG") is None
+
+    @pytest.mark.parametrize(
+        "raw",
+        ["mailto:organizer@example.com", "javascript:alert(1)", "ftp://files.example.org/f"],
+    )
+    def test_unopenable_link_falls_back_to_the_page(self, raw):
+        """urljoin is not a validator — it passes an absolute non-http(s)
+        scheme straight through. The event keeps a real link (the page it was
+        found on) rather than being dropped or carrying an unopenable one."""
+        ev = to_event(page_event(title="Some Event", url=raw), "https://www.nushackers.org/", "SG")
+        assert ev.url == "https://www.nushackers.org/"
+
+    def test_schemeless_domain_falls_back_to_the_page(self):
+        """urljoin would bury this under the page's own path — producing
+        https://www.nushackers.org/www.foo.org/e, a 404 that still passes every
+        later http(s) check."""
+        ev = to_event(
+            page_event(title="Some Event", url="www.foo.org/e"),
+            "https://www.nushackers.org/",
+            "SG",
+        )
+        assert ev.url == "https://www.nushackers.org/"
+
+    @pytest.mark.parametrize("raw", ["/hacknroll", "hacknroll", "index.html", "assets/v1.2/page"])
+    def test_real_relative_paths_still_resolve(self, raw):
+        """The schemeless check is deliberately narrow. Relative paths legitimately
+        contain dots, so a broader domain-shaped test would reject working links."""
+        ev = to_event(page_event(title="E", url=raw), "https://www.nushackers.org/events/", "SG")
+        assert ev.url.startswith("https://www.nushackers.org/")
+        assert raw.lstrip("/") in ev.url
 
 
 class TestHashGate:
