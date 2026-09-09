@@ -120,6 +120,8 @@ def format_message(event: Event, team_prompt: bool = False) -> str:
         lines.append(f"👥 {e(event.team_size)}")
     if event.invite_only:
         lines.append("🔒 Invite only")
+    if event.open_to:
+        lines.append(f"🎓 {e(event.open_to)}")
     if event.tags:
         lines.append(f"🏷 {e(', '.join(event.tags[:4]))}")
     # Scores and Claude's relevance reasons stay in the database — the public

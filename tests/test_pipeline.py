@@ -229,6 +229,7 @@ class TestFormatMessage:
             tags=["AI", "Web"],
             register_url="https://example.com/register",
             invite_only=True,
+            open_to="NUS <Computing> students only",
             organizer="Acme Labs",
             team_size="solo or teams up to 5",
             brief="Build an AI agent that does <cool> things.",
@@ -242,6 +243,8 @@ class TestFormatMessage:
         assert "$10,000" in msg
         assert "👥 solo or teams up to 5" in msg
         assert "🔒 Invite only" in msg
+        assert "🎓 NUS &lt;Computing&gt; students only" in msg
+        assert "NUS <Computing> students only" not in msg
         assert "⏰ register by Aug 2, 2026" in msg
         assert "👤 Acme Labs" in msg
         # scores and relevance reasons are backend-only; cards stay public-friendly
@@ -260,6 +263,7 @@ class TestFormatMessage:
         assert "Some Hackathon" in msg
         assert "Register here" not in msg
         assert "🔒" not in msg
+        assert "🎓" not in msg
         assert "👥" not in msg
         assert "blockquote" not in msg
 

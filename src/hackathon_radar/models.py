@@ -19,6 +19,7 @@ class Event:
     prize: str | None = None
     register_url: str | None = None  # source-provided action link; cards prefer public detail url
     invite_only: bool = False
+    open_to: str | None = None  # explicit audience restriction, e.g. "NUS students only"
     kind: str = "hackathon"  # "hackathon" | "networking" | "program" (Claude refines)
     level: str | None = None  # "beginner" | "intermediate" | "advanced"; None = unclear
     organizer: str | None = None
