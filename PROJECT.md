@@ -141,10 +141,8 @@ Secrets (GitHub + local `.env`): `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
 never in chat/screenshots; error paths and httpx logs are sanitized because a
 bot token leaked via a traceback once (regenerate via @BotFather `/revoke`).
 
-⚠️ **Dry-run caveat:** `--dry-run` writes nothing to the events DB, but the
-watchlist/email fetchers still advance their own state (page hashes, IMAP
-UID) — a local dry-run can consume events the cloud never sees. Known gap;
-avoid casual local dry-runs while the cloud pipeline is live.
+`--dry-run` snapshots and restores source-owned state files, even if previewing
+fails, so repeated previews do not consume watchlist changes or email UIDs.
 
 Cache reset (`gh cache delete`) = every current event looks new again → up to
 one day's cap re-posts, and one full re-scoring/enrichment spend. Deliberate
@@ -181,7 +179,6 @@ action, not routine.
 
 ## Known gaps & open risks (from the 2026-07-10 code review; honest list)
 
-- **Dry-run mutates source state** (watchlist hashes, email UID) — see caveat above
 - **actions/cache saves only on job success** — a failed run rolls back the
   DB: re-spend on the next run, and a sent-but-rolled-back event would re-post
 - **Queued payloads embed the Event schema** — renaming/removing an Event field
