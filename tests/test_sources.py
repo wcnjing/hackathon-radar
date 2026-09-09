@@ -119,3 +119,42 @@ def test_mlh_upcoming_filter():
     today = date(2026, 7, 7)
     assert not mlh._upcoming(past, today)
     assert mlh._upcoming(future, today)
+
+
+class TestLumaFormatStart:
+    """`_format_start` replaced glibc-only `%-d`/`%-I` with explicit int
+    conversion, which is portable but hand-rolled -- so it needs coverage of the
+    cases the old format codes handled for free."""
+
+    def test_renders_local_time_in_the_events_timezone(self):
+        # 10:30 UTC is 18:30 in Singapore.
+        assert luma._format_start("2026-09-16T10:30:00Z", "Asia/Singapore") == "Wed Sep 16, 6:30 PM"
+
+    def test_day_and_hour_carry_no_leading_zero(self):
+        out = luma._format_start("2026-09-05T01:05:00Z", "UTC")
+        assert out == "Sat Sep 5, 1:05 AM"
+        assert " 05," not in out and "01:05" not in out
+
+    def test_midnight_renders_as_twelve(self):
+        assert luma._format_start("2026-09-16T00:00:00Z", "UTC") == "Wed Sep 16, 12:00 AM"
+
+    def test_noon_renders_as_twelve_pm(self):
+        assert luma._format_start("2026-09-16T12:00:00Z", "UTC") == "Wed Sep 16, 12:00 PM"
+
+    def test_timezone_conversion_can_roll_the_date_over(self):
+        # 20:00 UTC on the 15th is 04:00 on the 16th in Singapore.
+        assert luma._format_start("2026-09-15T20:00:00Z", "Asia/Singapore") == "Wed Sep 16, 4:00 AM"
+
+    def test_offset_suffixes_parse_as_well_as_z(self):
+        assert luma._format_start("2026-09-16T18:30:00+08:00", "Asia/Singapore") == (
+            "Wed Sep 16, 6:30 PM"
+        )
+
+    def test_no_timezone_leaves_the_timestamp_as_given(self):
+        assert luma._format_start("2026-09-16T18:30:00Z", None) == "Wed Sep 16, 6:30 PM"
+
+    def test_missing_or_unparseable_input_returns_empty(self):
+        assert luma._format_start(None, "UTC") == ""
+        assert luma._format_start("", "UTC") == ""
+        assert luma._format_start("not a date", "UTC") == ""
+        assert luma._format_start("2026-09-16T18:30:00Z", "Not/AZone") == ""

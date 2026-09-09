@@ -56,7 +56,18 @@ def _collect(config: dict, store: Store):
 
 
 def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
-    """Rank new events and pick the ones worth posting; records the rest."""
+    """Rank new events and pick the ones worth posting; records the rest.
+
+    "Records the rest" has one exception, and it is the difference between a
+    fail-safe and a fail-permanent. `store.record` writes to the same table
+    `is_seen` reads, and `_collect` only scores events that are not seen — so a
+    recorded event is never scored again. That is correct for a real judgement
+    and catastrophic for a guess: one transient 529 would route a whole fetch
+    through the keyword scorer and bury every event it under-scored, forever.
+
+    So an event skipped on a degraded run is left unrecorded. It costs a
+    re-fetch and a re-score next run, and the channel keeps the event.
+    """
     interests = config.get("interests", {})
     min_score = interests.get("min_score", 6)
     # e.g. { networking = 8 }: talks/mixers must be exceptional to earn a post.
@@ -70,27 +81,60 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     }
 
     selected = []
+    deferred = 0
+
+    def record(event, score, reason, degraded) -> None:
+        nonlocal deferred
+        if degraded:
+            deferred += 1
+            return
+        if not dry_run:
+            store.record(event, score, reason)
+
     for event in sorted(new, key=lambda e: scores[e.key][0], reverse=True):
-        score, reason = scores[event.key]
+        result = scores[event.key]
+        score, reason = result[0], result[1]
+        degraded = result.degraded
         norm_title = normalize_title(event.title)
         if norm_title and norm_title in recent_titles:
             log.info("skip (duplicate title): %s", event.title)
+            # A duplicate title is a fact about the store, not about the score,
+            # so it is recorded even on a degraded run — re-scoring it later
+            # would only reach the same conclusion.
             if not dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
         threshold = min_by_kind.get(event.kind, min_score)
         if score < threshold:
-            log.info("skip (score %.0f < %d for %s): %s", score, threshold, event.kind, event.title)
-            if not dry_run:
-                store.record(event, score, reason)
+            log.info(
+                "skip (score %.0f < %d for %s)%s: %s",
+                score,
+                threshold,
+                event.kind,
+                " [degraded, will re-score]" if degraded else "",
+                event.title,
+            )
+            record(event, score, reason, degraded)
             continue
         if len(selected) >= cap:
             log.info("skip (over cap): %s", event.title)
-            if not dry_run:
-                store.record(event, score, reason)
+            record(event, score, reason, degraded)
             continue
         recent_titles.add(norm_title)
         selected.append(event)
+
+    degraded_total = sum(1 for e in new if scores[e.key].degraded)
+    if degraded_total:
+        # One summary line, because the per-event skips are indistinguishable
+        # from ordinary ones in an Actions log and this is the state anyone
+        # debugging "why did nothing post today" needs to see first.
+        log.warning(
+            "DEGRADED RUN: %d of %d event(s) keyword-scored without Claude; "
+            "%d left unrecorded for re-scoring next run",
+            degraded_total,
+            len(new),
+            deferred,
+        )
     return selected
 
 
@@ -105,8 +149,8 @@ def _ingest(config: dict, store: Store) -> None:
     if config.get("enrich", {}).get("enabled", True):
         enrich_events(selected, config, client)
     for event in selected:
-        score, reason = scores[event.key]
-        store.queue_event(event, score, reason)
+        result = scores[event.key]
+        store.queue_event(event, result.score, result.reason)
     store.set_meta("last_fetch_at", _iso(_now()))
     log.info("queued %d event(s); queue depth now %d", len(selected), store.queue_depth())
 
@@ -180,7 +224,7 @@ def _preview(args: argparse.Namespace, config: dict, store: Store) -> int:
     if config.get("enrich", {}).get("enabled", True):
         enrich_events(selected, config, client)
     for event in selected:
-        score, _ = scores[event.key]
+        score = scores[event.key].score
         card = format_message(event, team_prompt=config.get("notify", {}).get("team_prompt", False))
         print(f"\n--- would queue ({score:.0f}/10) ---\n{card}")
     log.info("%d event(s) would be queued (dry run)", len(selected))

@@ -110,7 +110,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pypdf" },
     { name = "python-dotenv" },
-    { name = "tzdata" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
 ]
 
 [package.dev-dependencies]
@@ -126,7 +126,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pypdf", specifier = ">=6.14.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "tzdata", specifier = ">=2026.3" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2026.3" },
 ]
 
 [package.metadata.requires-dev]

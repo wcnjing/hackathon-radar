@@ -21,7 +21,7 @@ from hackathon_radar.notify import (
     format_message,
     is_quiet_hour,
 )
-from hackathon_radar.scoring import ScoreBatch, ScoredEvent, score_events
+from hackathon_radar.scoring import ScoreBatch, ScoredEvent, ScoreResult, score_events
 from hackathon_radar.store import Store
 
 SCOPE = {"mode": "sg_plus_online", "home_country": "SG", "home_city": "singapore"}
@@ -187,7 +187,7 @@ class TestDryRun:
         monkeypatch.setattr(
             cli,
             "score_events",
-            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
+            lambda events, cfg, client=None: {e.key: ScoreResult(9.0, "great fit") for e in events},
         )
 
         args = argparse.Namespace(dry_run=True, max_notify=None)
@@ -212,7 +212,7 @@ class TestDryRun:
         monkeypatch.setattr(
             cli,
             "score_events",
-            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
+            lambda events, cfg, client=None: {e.key: ScoreResult(9.0, "great fit") for e in events},
         )
 
         assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
@@ -454,7 +454,7 @@ class TestSpamGuards:
         monkeypatch.setattr(
             cli,
             "score_events",
-            lambda events, cfg, client=None: {e.key: (9.0, "fit") for e in events},
+            lambda events, cfg, client=None: {e.key: ScoreResult(9.0, "fit") for e in events},
         )
 
         assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
@@ -471,7 +471,9 @@ class TestFullEvents:
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
         monkeypatch.setattr(cli, "make_client", lambda: None)
         monkeypatch.setattr(
-            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+            cli,
+            "score_events",
+            lambda evs, cfg, client=None: {e.key: ScoreResult(9.0, "x") for e in evs},
         )
         cli.run(argparse.Namespace(dry_run=True, max_notify=None))
 
@@ -503,7 +505,11 @@ class TestKindThreshold:
             "notify": {"max_per_run": 9},
             "enrich": {"enabled": False},
         }
-        scores = {hack.key: (7.0, "x"), meetup.key: (7.0, "x"), great_meetup.key: (9.0, "x")}
+        scores = {
+            hack.key: ScoreResult(7.0, "x"),
+            meetup.key: ScoreResult(7.0, "x"),
+            great_meetup.key: ScoreResult(9.0, "x"),
+        }
         monkeypatch.setattr(cli, "load_config", lambda: config)
         monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: [hack, meetup, great_meetup])
@@ -538,7 +544,10 @@ class TestEnrichmentScope:
         monkeypatch.setattr(
             cli,
             "score_events",
-            lambda events, cfg, client=None: {good.key: (9.0, "great"), weak.key: (2.0, "weak")},
+            lambda events, cfg, client=None: {
+                good.key: ScoreResult(9.0, "great"),
+                weak.key: ScoreResult(2.0, "weak"),
+            },
         )
         enriched = []
         monkeypatch.setattr(cli, "enrich_events", lambda evs, cfg, client: enriched.extend(evs))
@@ -564,7 +573,9 @@ class TestDripQueue:
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
         monkeypatch.setattr(cli, "make_client", lambda: None)
         monkeypatch.setattr(
-            cli, "score_events", lambda evs, cfg, client=None: {e.key: (9.0, "x") for e in evs}
+            cli,
+            "score_events",
+            lambda evs, cfg, client=None: {e.key: ScoreResult(9.0, "x") for e in evs},
         )
         return cli
 
@@ -776,7 +787,7 @@ class TestIssue4KeywordFallbackKind:
         for label, client in self._degraded_clients():
             event = make_event(title="Founders Networking Meetup", location="Singapore")
             scores = score_events([event], self.CONFIG, client)
-            score, reason = scores[event.key]
+            score, reason = scores[event.key][:2]
             assert event.kind == "networking", f"{label}: kind was {event.kind!r}"
             assert not self._posts(event, score), f"{label}: posted at {score}"
 
@@ -785,7 +796,7 @@ class TestIssue4KeywordFallbackKind:
         for label, client in self._degraded_clients():
             event = make_event(title="AI Student Hackathon", location="Singapore")
             scores = score_events([event], self.CONFIG, client)
-            score, _ = scores[event.key]
+            score = scores[event.key].score
             assert event.kind == "hackathon", f"{label}: kind was {event.kind!r}"
             assert self._posts(event, score), f"{label}: blocked at {score}"
 
@@ -808,7 +819,7 @@ class TestIssue4KeywordFallbackKind:
                     return SimpleNamespace(parsed_output=ScoreBatch(scores=[scored]))
 
         scores = score_events([event], self.CONFIG, _Scores())
-        score, reason = scores[event.key]
+        score, reason = scores[event.key][:2]
         assert event.kind == "networking"
         assert score == 9.0
         assert reason == "rare access to major builders"
@@ -825,7 +836,7 @@ class TestIssue4KeywordFallbackKind:
                     return SimpleNamespace(parsed_output=ScoreBatch(scores=[]))
 
         scores = score_events([skipped], self.CONFIG, _ReturnsNothing())
-        score, _ = scores[skipped.key]
+        score = scores[skipped.key].score
         assert skipped.kind == "networking"
         assert not self._posts(skipped, score)
 

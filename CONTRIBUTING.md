@@ -149,7 +149,7 @@ PowerShell as well as macOS and Linux shells.
 | `scoring.py` | Claude scoring + classification (kind, experience level), keyword fallback |
 | `enrich.py` | Page fetch + extraction for events about to post; also shared HTML→text |
 | `filtering.py` | Scope rules, title normalization for dedupe |
-| `store.py` | SQLite: seen-events, the notification queue, pacing metadata |
+| `store.py` | SQLite: seen-events, the notification queue, pacing metadata. **`record()` is one-way** — it writes the table `is_seen` reads, so a recorded event is never scored again |
 | `notify.py` | Telegram formatting and delivery |
 | `cli.py` | Orchestration: collect → select → enrich → queue → drip |
 | `config.toml` | All tuning (interests, thresholds, sources, caps) — prefer config over code |

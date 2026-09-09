@@ -14,6 +14,9 @@ def isolate_score_cache(tmp_path, monkeypatch):
     from hackathon_radar import scoring
 
     monkeypatch.setenv("RADAR_NO_SCORE_CACHE", "1")
-    # raising=False so this fixture never masks a real failure as a fixture
-    # error — tests should fail on their own assertions, not on setup.
-    monkeypatch.setattr(scoring, "CACHE_PATH", tmp_path / "score_cache.json", raising=False)
+    # raising=True (the default) on purpose. With raising=False, renaming
+    # CACHE_PATH would make this line quietly create a dead attribute and every
+    # test would then read and write the developer's real data/score_cache.json.
+    # For a fixture whose entire job is isolation, failing loudly on a rename is
+    # the safe behaviour -- the noisy error is the feature.
+    monkeypatch.setattr(scoring, "CACHE_PATH", tmp_path / "score_cache.json")

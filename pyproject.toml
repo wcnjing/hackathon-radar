@@ -13,7 +13,11 @@ dependencies = [
     "httpx>=0.28.1",
     "pypdf>=6.14.2",
     "python-dotenv>=1.2.2",
-    "tzdata>=2026.3",
+    # Windows ships no system zoneinfo, so ZoneInfo("Asia/Singapore") needs
+    # this package there. Linux and macOS already have a system tz database,
+    # and CI runs on ubuntu -- an unconditional dep would be dead weight on
+    # every platform that actually deploys this.
+    "tzdata>=2026.3; sys_platform == 'win32'",
 ]
 
 [project.scripts]

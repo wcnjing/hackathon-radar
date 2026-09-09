@@ -110,6 +110,20 @@ guard, cap) → enrichment (Devpost pages: team size, deadline, expandable brief
 — **only for events actually being posted**) → queue → **drip** (each run posts
 ≤1; cron fires every 30 min; sources re-fetched every 6h).
 
+**Scoring determinism:** `temperature=0`, batch composition sorted by event key
+so an event's batch-mates don't depend on fetch order, and a content-addressed
+cache (`data/score_cache.json`, persisted by the Actions cache; bypass with
+`RADAR_NO_SCORE_CACHE=1`) keyed on schema version + model + profile + batch, so
+any real change busts it. Near-zero hit rate on the ingest path by design — its
+value is free repeat scoring for calibration, and not re-billing after a crash.
+
+**Degraded scoring is never final.** When Claude was expected but failed, scores
+are tagged `degraded` and `_select` leaves skipped events *unrecorded*, so the
+next ingest re-scores them. `store.record` writes the table `is_seen` reads, so
+recording a guess would bury the event permanently — one transient 529 would
+have cost a whole fetch. Running with no API key at all is a supported mode and
+is *not* degraded: those scores are that deployment's real answer.
+
 **Guardrails:** seen-DB; score thresholds (6, networking 8); 30-min drip;
 15/day rolling cap; 60-day repeat-title guard; full-event filter; quiet hours
 (23:00–08:00 SGT, silent delivery); failed sends stay queued and retry;
