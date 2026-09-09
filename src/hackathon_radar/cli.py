@@ -8,7 +8,13 @@ from zoneinfo import ZoneInfo
 from hackathon_radar.config import db_path, load_config
 from hackathon_radar.enrich import enrich_events
 from hackathon_radar.filtering import in_scope, normalize_title
-from hackathon_radar.notify import Telegram, TelegramError, format_message, is_quiet_hour
+from hackathon_radar.notify import (
+    Telegram,
+    TelegramError,
+    build_reply_markup,
+    format_message,
+    is_quiet_hour,
+)
 from hackathon_radar.scoring import make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
@@ -152,6 +158,9 @@ def _drain(config: dict, store: Store, telegram: Telegram) -> int:
         telegram.send(
             format_message(event, team_prompt=notify_cfg.get("team_prompt", False)),
             silent=silent,
+            reply_markup=build_reply_markup(
+                event, notify_cfg.get("register_button_text", "Register →")
+            ),
         )
     except TelegramError as exc:
         # Still queued (not marked notified) — retried next run.
