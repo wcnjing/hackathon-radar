@@ -16,7 +16,7 @@ from hackathon_radar.notify import (
     is_quiet_hour,
 )
 from hackathon_radar.scoring import make_client, score_events
-from hackathon_radar.sources import fetch_all
+from hackathon_radar.sources import fetch_all, preserve_source_state
 from hackathon_radar.store import Store
 
 log = logging.getLogger("radar")
@@ -192,9 +192,11 @@ def run(args: argparse.Namespace) -> int:
     store = Store(db_path())
 
     if args.dry_run:
-        result = _preview(args, config, store)
-        store.close()
-        return result
+        try:
+            with preserve_source_state():
+                return _preview(args, config, store)
+        finally:
+            store.close()
 
     telegram = Telegram()
     if not telegram.configured:

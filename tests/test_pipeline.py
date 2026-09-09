@@ -164,6 +164,32 @@ class TestStore:
 
 
 class TestDryRun:
+    @staticmethod
+    def _setup_stateful_preview(tmp_path, monkeypatch):
+        from hackathon_radar import cli
+        from hackathon_radar.sources import email_source, watchlist
+
+        event = make_event(online=True, title="AI Hackathon")
+        config = {
+            "interests": {"keywords": ["ai"], "min_score": 1},
+            "scope": {"mode": "global"},
+            "notify": {"max_per_run": 5},
+            "enrich": {"enabled": False},
+        }
+        watchlist_path = tmp_path / "watchlist_state.json"
+        email_path = tmp_path / "email_state.json"
+        monkeypatch.setattr(watchlist, "STATE_PATH", watchlist_path)
+        monkeypatch.setattr(email_source, "STATE_PATH", email_path)
+        monkeypatch.setattr(cli, "load_config", lambda: config)
+        monkeypatch.setattr(cli, "db_path", lambda: tmp_path / "radar.db")
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        monkeypatch.setattr(
+            cli,
+            "score_events",
+            lambda events, cfg, client=None: {e.key: (9.0, "great fit") for e in events},
+        )
+        return cli, event, watchlist_path, email_path
+
     def test_dry_run_does_not_mark_events_seen(self, tmp_path, monkeypatch, capsys):
         """Regression: a dry run must not persist events, or the first real
         run would silently skip everything the dry run previewed."""
@@ -216,6 +242,64 @@ class TestDryRun:
         store = Store(tmp_path / "radar.db")
         assert not store.is_seen(event)
         store.close()
+
+    def test_dry_run_restores_source_state_bytes(self, tmp_path, monkeypatch):
+        cli, event, watchlist_path, email_path = self._setup_stateful_preview(tmp_path, monkeypatch)
+        watchlist_before = b'{"page": "original spacing"}\n'
+        email_before = b'{"last_uid": 41}\n'
+        watchlist_path.write_bytes(watchlist_before)
+        email_path.write_bytes(email_before)
+
+        def fetch_and_advance(_config):
+            watchlist_path.write_text('{"page": "new digest"}')
+            email_path.write_text('{"last_uid": 42}')
+            return [event]
+
+        monkeypatch.setattr(cli, "fetch_all", fetch_and_advance)
+
+        assert cli.run(argparse.Namespace(dry_run=True, max_notify=None)) == 0
+        assert watchlist_path.read_bytes() == watchlist_before
+        assert email_path.read_bytes() == email_before
+
+    def test_consecutive_dry_runs_are_repeatable(self, tmp_path, monkeypatch, capsys):
+        cli, event, watchlist_path, email_path = self._setup_stateful_preview(tmp_path, monkeypatch)
+
+        def fetch_unless_consumed(_config):
+            if watchlist_path.exists() or email_path.exists():
+                return []
+            watchlist_path.write_text('{"page": "digest"}')
+            email_path.write_text('{"last_uid": 42}')
+            return [event]
+
+        monkeypatch.setattr(cli, "fetch_all", fetch_unless_consumed)
+        args = argparse.Namespace(dry_run=True, max_notify=None)
+
+        assert cli.run(args) == 0
+        first = capsys.readouterr().out
+        assert cli.run(args) == 0
+        second = capsys.readouterr().out
+
+        assert first == second
+        assert "would queue" in first
+        assert not watchlist_path.exists()
+        assert not email_path.exists()
+
+    def test_source_state_restored_when_preview_fails(self, tmp_path, monkeypatch):
+        cli, _, watchlist_path, email_path = self._setup_stateful_preview(tmp_path, monkeypatch)
+        before = b'{"page": "original"}\n'
+        watchlist_path.write_bytes(before)
+
+        def broken_fetch(_config):
+            watchlist_path.write_text('{"page": "changed"}')
+            email_path.write_text('{"last_uid": 42}')
+            raise RuntimeError("preview failed")
+
+        monkeypatch.setattr(cli, "fetch_all", broken_fetch)
+
+        with pytest.raises(RuntimeError, match="preview failed"):
+            cli.run(argparse.Namespace(dry_run=True, max_notify=None))
+        assert watchlist_path.read_bytes() == before
+        assert not email_path.exists()
 
 
 class TestFormatMessage:
