@@ -24,19 +24,31 @@ NETWORKING_TITLE_RE = re.compile(
 PROGRAM_TITLE_RE = re.compile(
     r"\b(accelerator|fellowship|cohort|bootcamp|incubat\w*|apprenticeship|residency)\b", re.I
 )
+# Build-event signals come in two strengths, and the difference decides who
+# wins against a networking word in the same title.
+#
+# STRONG words name the format outright. Nothing else is called a hackathon or a
+# datathon, so these beat any networking word: "Hackathon Demo Day" is a
+# hackathon that happens to end in a demo, not a demo day.
+#
 # `hacka` catches hackathon/hackathons; `hacks\b` catches MHacks and TartanHacks
 # where the prefix is glued on; `\bhack\b` catches "Hack&Roll". Deliberately not
 # a bare `hack`, which would also match "shack" and "hackney".
+STRONG_HACKATHON_RE = re.compile(
+    r"hacka|hacks\b|\bhack\b|\bbuildathon\b|\bbuild-a-thon\b|\bdatathon\b", re.I
+)
+
+# WEAK words merely suggest building. Every one of them appears happily in the
+# name of a mixer -- "Build Club Mixer", "Pitch Competition & Networking Night",
+# "Demo Day Jam Session" -- so they lose to an explicit networking word and are
+# only consulted once none is present. Ranking them above networking let six of
+# seven such titles clear the base bar of 6 and post, which is precisely what
+# issue #4's networking bar exists to prevent.
 #
-# Every other alternative is `\b`-anchored on both sides. An unanchored `sprint`
-# used to classify "Sprinter Van Expo" as a hackathon, which is the kind of
-# false positive that erodes trust in the whole fallback.
-#
-# `\bbuild\b` is what makes "Build with AI: Gemini Developer Day" read as a
-# build event. Its closing `\b` is load-bearing: it does not match "Builders",
-# so "AI Builders Mixer" stays networking and issue #4's bar still holds.
-HACKATHON_TITLE_RE = re.compile(
-    r"hacka|hacks\b|\bhack\b|\bbuildathon\b|\bbuild-a-thon\b|\bdatathon\b|"
+# Each is `\b`-anchored on both sides. An unanchored `sprint` once classified
+# "Sprinter Van Expo" as a hackathon; `\bbuild\b`'s closing boundary is what
+# keeps "AI Builders Mixer" out while letting "Build with AI" through.
+WEAK_BUILD_RE = re.compile(
     r"\bsprint\b|\bjam\b|\bworkshop\b|\bleague\b|\bbuild\b|"
     r"\b(challenge|competition|contest)\b",
     re.I,
@@ -58,11 +70,22 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
 
     Claude overrides all of this when available; it only runs when Claude isn't.
 
-    Order matters. Hackathon signals are tested first because a title can carry
-    both — "Social Impact Hackathon" and "Hackathon Demo Day" were previously
-    filed as networking on the strength of "social" and "demo day", and then
-    held below the networking bar. When a title says hackathon anywhere, it is
-    a hackathon.
+    Precedence, strongest claim first:
+
+        1. source        devpost/mlh publish nothing else
+        2. strong build  "hackathon", "datathon" — names the format outright
+        3. program       "accelerator", "fellowship"
+        4. networking    "mixer", "meetup", "networking"
+        5. weak build    "build", "jam", "league", "challenge"
+        6. default       networking, with no signal reported
+
+    The split at 2/5 is the whole point. Ranking *every* build word above
+    networking fixes "Social Impact Hackathon" and "Hackathon Demo Day", which
+    were filed as networking on the strength of "social" and "demo day" — but it
+    also hands the base bar of 6 to "Build Club Mixer", "Pitch Competition &
+    Networking Night" and "Founders Breakfast: Build in Public", all of which
+    then post. Strong words earn that precedence; weak ones do not, because a
+    mixer will happily call itself a jam.
 
     Searches tags as well as the title: MLH stamps every event
     `tags=["student hackathon"]` and Devpost carries its themes, so the tags are
@@ -72,12 +95,14 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
     if event.source in HACKATHON_ONLY_SOURCES:
         return "hackathon", True
     haystack = " ".join([event.title, *event.tags]).lower()
-    if HACKATHON_TITLE_RE.search(haystack):
+    if STRONG_HACKATHON_RE.search(haystack):
         return "hackathon", True
     if PROGRAM_TITLE_RE.search(haystack):
         return "program", True
     if NETWORKING_TITLE_RE.search(haystack):
         return "networking", True
+    if WEAK_BUILD_RE.search(haystack):
+        return "hackathon", True
     # No signal either way. Defaulting to networking is the cautious read: it
     # applies the higher bar to something we cannot vouch for. That is only
     # tolerable because a degraded-path score is no longer final — `cli._select`

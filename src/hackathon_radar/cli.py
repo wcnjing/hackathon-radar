@@ -49,7 +49,16 @@ def _collect(config: dict, store: Store):
     try:
         client = make_client()
     except Exception as exc:
-        log.info("Anthropic credentials unavailable (%s); keyword scoring only", exc)
+        # A warning, not info. Running keyword-only is a supported mode for
+        # contributors, but in production it is almost always a missing or
+        # expired secret — and unlike a degraded run, these scores are treated
+        # as final and do post. That combination deserves to be visible in the
+        # Actions log rather than inferred from the absence of Claude reasons.
+        log.warning(
+            "Anthropic credentials unavailable (%s); scoring with keywords only. "
+            "Scores are coarse and WILL post. If this is production, check ANTHROPIC_API_KEY.",
+            exc,
+        )
         client = None
     scores = score_events(new, config, client)
     return new, scores, client
@@ -58,15 +67,23 @@ def _collect(config: dict, store: Store):
 def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     """Rank new events and pick the ones worth posting; records the rest.
 
-    "Records the rest" has one exception, and it is the difference between a
-    fail-safe and a fail-permanent. `store.record` writes to the same table
-    `is_seen` reads, and `_collect` only scores events that are not seen — so a
-    recorded event is never scored again. That is correct for a real judgement
-    and catastrophic for a guess: one transient 529 would route a whole fetch
-    through the keyword scorer and bury every event it under-scored, forever.
+    Degraded events are the exception, and they are acted on in neither
+    direction: not posted, not recorded, just left for the next run.
 
-    So an event skipped on a degraded run is left unrecorded. It costs a
-    re-fetch and a re-score next run, and the channel keeps the event.
+    Not recorded, because recording is one-way. `store.record` writes the table
+    `is_seen` reads, and `_collect` only scores events that are not seen, so a
+    recorded event is never scored again. Correct for a real judgement,
+    catastrophic for a guess: one transient 529 would bury every event the
+    keyword scorer under-scored, forever.
+
+    Not posted, for the mirror-image reason. A keyword guess can be *higher*
+    than the score it stands in for — an event Claude rates 2/10 keyword-scores
+    8.0 and clears the bar — so acting on the optimistic half of a guess while
+    deferring the pessimistic half would post exactly what the channel exists
+    to filter out. Deferring only skips would be a fail-safe in one direction
+    and a fail-open in the other.
+
+    Both cost the same thing: a re-fetch and a re-score next run.
     """
     interests = config.get("interests", {})
     min_score = interests.get("min_score", 6)
@@ -83,14 +100,6 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     selected = []
     deferred = 0
 
-    def record(event, score, reason, degraded) -> None:
-        nonlocal deferred
-        if degraded:
-            deferred += 1
-            return
-        if not dry_run:
-            store.record(event, score, reason)
-
     for event in sorted(new, key=lambda e: scores[e.key][0], reverse=True):
         result = scores[event.key]
         score, reason = result[0], result[1]
@@ -104,21 +113,22 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
             if not dry_run:
                 store.record(event, score, "skipped: same title as a recent notification")
             continue
+        if degraded:
+            # Defer the whole decision, not just the negative half. Checked
+            # before the threshold so a guess can neither post nor be buried.
+            deferred += 1
+            log.info("defer (degraded, will re-score next run): %s", event.title)
+            continue
         threshold = min_by_kind.get(event.kind, min_score)
         if score < threshold:
-            log.info(
-                "skip (score %.0f < %d for %s)%s: %s",
-                score,
-                threshold,
-                event.kind,
-                " [degraded, will re-score]" if degraded else "",
-                event.title,
-            )
-            record(event, score, reason, degraded)
+            log.info("skip (score %.0f < %d for %s): %s", score, threshold, event.kind, event.title)
+            if not dry_run:
+                store.record(event, score, reason)
             continue
         if len(selected) >= cap:
             log.info("skip (over cap): %s", event.title)
-            record(event, score, reason, degraded)
+            if not dry_run:
+                store.record(event, score, reason)
             continue
         recent_titles.add(norm_title)
         selected.append(event)
@@ -130,7 +140,7 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
         # debugging "why did nothing post today" needs to see first.
         log.warning(
             "DEGRADED RUN: %d of %d event(s) keyword-scored without Claude; "
-            "%d left unrecorded for re-scoring next run",
+            "%d deferred (neither posted nor recorded) for re-scoring next run",
             degraded_total,
             len(new),
             deferred,

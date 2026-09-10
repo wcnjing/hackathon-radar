@@ -291,6 +291,8 @@ def make_client():
 
 
 def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str, str], ScoreResult]:
+    import anthropic
+
     scoring_cfg = config.get("scoring", {})
     interests = config.get("interests", {})
     model = scoring_cfg.get("model", "claude-haiku-4-5")
@@ -328,14 +330,35 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
         if scored_batch is not None:
             log.info("scoring cache hit (%d event(s))", len(scored_batch))
         else:
-            response = client.messages.parse(
-                model=model,
-                max_tokens=4096,
-                system=system,
-                messages=[{"role": "user", "content": f"Score these events:\n{payload}"}],
-                output_format=ScoreBatch,
-                temperature=SCORING_TEMPERATURE,
-            )
+            try:
+                response = client.messages.parse(
+                    model=model,
+                    max_tokens=4096,
+                    system=system,
+                    messages=[{"role": "user", "content": f"Score these events:\n{payload}"}],
+                    output_format=ScoreBatch,
+                    temperature=SCORING_TEMPERATURE,
+                )
+            except anthropic.AuthenticationError:
+                # A bad key is bad for every batch; there is nothing to salvage.
+                # Let `score_events` handle it as it always has.
+                raise
+            except Exception:
+                # Contain the failure to its own batch. Letting it escape the
+                # loop would discard the scores Claude already returned for
+                # earlier batches and replace them with keyword guesses — and a
+                # keyword guess can be *higher* than the rejection it overwrites,
+                # so events Claude scored 2/10 would be queued and posted.
+                #
+                # `continue` leaves this batch's events out of `results`; the
+                # `missing` tail below keyword-scores exactly them, degraded.
+                log.exception(
+                    "batch %d of %d failed; its %d event(s) fall to the keyword scorer (degraded)",
+                    i // batch_size + 1,
+                    (len(ordered) + batch_size - 1) // batch_size,
+                    len(batch),
+                )
+                continue
             scored_batch = response.parsed_output.scores
             if len(scored_batch) != len(batch):
                 # A short answer is a bad answer, and caching it would freeze it
@@ -358,12 +381,14 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
                 event.kind = scored.kind
                 event.level = None if scored.level == "unclear" else scored.level
 
-    # Anything the model skipped falls back to the keyword scorer. Degraded:
-    # Claude answered for this run but not for this event, so the keyword score
-    # is a stand-in and the event deserves another look next time.
+    # Whatever has no score by now falls back to the keyword scorer: events the
+    # model omitted from an otherwise good answer, and every event in a batch
+    # whose call failed. Both are degraded — Claude answered for this run but
+    # not for these events, so the keyword score is a stand-in and the event
+    # deserves another look next run.
     missing = [e for e in events if e.key not in results]
     if missing:
-        log.warning("model returned no score for %d event(s); keyword-scoring them", len(missing))
+        log.warning("no model score for %d event(s); keyword-scoring them (degraded)", len(missing))
     for event in missing:
         results[event.key] = _fallback_score(event, interests, degraded=True)
     return results

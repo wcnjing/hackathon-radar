@@ -7,13 +7,14 @@ guessed scores into the table `is_seen` reads and nothing ever re-scored them.
 """
 
 import json
+import os
 import tomllib
 from pathlib import Path
 
 import httpx
 import pytest
 
-from hackathon_radar import cli
+from hackathon_radar import cli, filtering
 from hackathon_radar.cli import _select
 from hackathon_radar.filtering import (
     classify_kind,
@@ -166,15 +167,28 @@ class TestDegradedRunsAreRevisitable:
         assert selected == []
         assert seen is True
 
-    def test_over_cap_on_a_degraded_run_is_also_left_unrecorded(self, tmp_path):
+    def test_a_high_scoring_degraded_event_is_not_queued_either(self, tmp_path):
+        """The mirror image, and the one that actually reaches subscribers. A
+        keyword guess can be *higher* than the score it stands in for, so acting
+        on the optimistic half while deferring the pessimistic half would post
+        exactly what the channel exists to filter out."""
         events = [make_event(title=f"AI Hackathon {i}", external_id=str(i)) for i in range(3)]
         scores = {e.key: ScoreResult(9.0, "good", degraded=True) for e in events}
         store = Store(tmp_path / "t.db")
-        selected = _select(events, scores, store, CONFIG, cap=1, dry_run=False)
+        selected = _select(events, scores, store, CONFIG, cap=99, dry_run=False)
         unseen = [e for e in events if not store.is_seen(e)]
         store.close()
-        assert len(selected) == 1
-        assert len(unseen) == 3, "capped events on a degraded run must stay re-scorable"
+        assert selected == [], "a guessed 9.0 was queued for posting"
+        assert len(unseen) == 3, "degraded events must stay re-scorable"
+
+    def test_the_same_score_posts_once_it_is_not_a_guess(self, tmp_path):
+        """Guard the premise: 9.0 clears the bar, so the test above is measuring
+        the degraded flag and not an unrelated threshold failure."""
+        event = make_event(title="AI Hackathon")
+        store = Store(tmp_path / "t.db")
+        selected = _select([event], {event.key: ScoreResult(9.0, "good")}, store, CONFIG, 99, False)
+        store.close()
+        assert [e.external_id for e in selected] == ["1"]
 
     def test_duplicate_titles_are_recorded_even_when_degraded(self, tmp_path):
         """A duplicate title is a fact about the store, not about the score:
@@ -381,16 +395,53 @@ class TestCacheWriteIsAtomic:
         assert cache_file.exists()
         assert list(tmp_path.glob("*.tmp")) == []
 
-    def test_an_existing_cache_is_never_truncated_in_place(self, tmp_path, monkeypatch):
-        """os.replace swaps the file; a reader sees the old or the new one."""
+    def test_the_file_is_replaced_not_rewritten_in_place(self, tmp_path, monkeypatch):
+        """The inode is the evidence. An in-place truncate-and-write keeps it;
+        os.replace swaps in a different file and so changes it. Asserting on
+        size or content instead would pass against plain write_text, which is
+        exactly the bug this guards against."""
         cache_file = tmp_path / "c.json"
         monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", cache_file)
         _cache_store({}, "first", [{"id": "a"}])
-        inode_before = cache_file.stat().st_size
-        cache = _cache_load()
-        _cache_store(cache, "second", [{"id": "b"}])
+        inode_before = cache_file.stat().st_ino
+        _cache_store(_cache_load(), "second", [{"id": "b"}])
         assert set(json.loads(cache_file.read_text(encoding="utf-8"))) == {"first", "second"}
-        assert cache_file.stat().st_size != inode_before
+        assert cache_file.stat().st_ino != inode_before, (
+            "cache was rewritten in place rather than replaced"
+        )
+
+    def test_os_replace_is_what_publishes_the_new_cache(self, tmp_path, monkeypatch):
+        """Belt and braces for platforms where st_ino is not meaningful: assert
+        the call itself, and that it moves a temp file onto CACHE_PATH."""
+        cache_file = tmp_path / "c.json"
+        monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", cache_file)
+        calls = []
+        real_replace = os.replace
+        monkeypatch.setattr(
+            "hackathon_radar.scoring.os.replace",
+            lambda src, dst: (calls.append((str(src), str(dst))), real_replace(src, dst))[1],
+        )
+        _cache_store({}, "k", [{"id": "a"}])
+        assert len(calls) == 1, "the cache was written without os.replace"
+        src, dst = calls[0]
+        assert dst == str(cache_file)
+        assert src != dst and src.endswith(".tmp")
+
+    def test_a_failed_publish_leaves_the_previous_cache_intact(self, tmp_path, monkeypatch):
+        """The guarantee, not the mechanism. write_text truncates first, so an
+        interrupted write destroys what was there; write-then-rename cannot."""
+        cache_file = tmp_path / "c.json"
+        monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", cache_file)
+        _cache_store({}, "first", [{"id": "a"}])
+
+        def boom(src, dst):
+            raise OSError("interrupted before publish")
+
+        monkeypatch.setattr("hackathon_radar.scoring.os.replace", boom)
+        _cache_store(_cache_load(), "second", [{"id": "b"}])  # must not raise
+
+        surviving = json.loads(cache_file.read_text(encoding="utf-8"))
+        assert set(surviving) == {"first"}, "an interrupted write damaged the existing cache"
 
     def test_eviction_still_applies(self, tmp_path, monkeypatch):
         monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", tmp_path / "c.json")
@@ -687,3 +738,294 @@ class TestOutageRecoveryThroughIngest:
         seen = store.is_seen(event)
         store.close()
         assert seen is True
+
+
+# ---------------------------------------------------------------------------
+# Review follow-up: one failed batch must not discard the others
+# ---------------------------------------------------------------------------
+
+
+class TestBatchFailureIsContained:
+    """A 529 on batch N used to escape the whole loop, so `score_events`
+    keyword-scored every event -- including the ones Claude had already scored
+    in batches 1..N-1. Because a keyword guess can outscore the rejection it
+    replaced, those events then cleared the bar and were queued.
+    """
+
+    CONFIG = {**CONFIG, "scoring": {"batch_size": 2}}
+
+    def _events(self, n=4):
+        return [
+            Event(
+                source="devpost",
+                external_id=f"e{i}",
+                title=f"Crypto Hackathon {i}",
+                url="https://example.com",
+            )
+            for i in range(n)
+        ]
+
+    class FailsOnBatch:
+        """Scores every batch but the nth, which raises."""
+
+        def __init__(self, fail_on=2, exc=None):
+            self.fail_on, self.exc = fail_on, exc or RuntimeError("529 Overloaded")
+            self.calls = 0
+            self.messages = self
+
+        def parse(self, **kw):
+            self.calls += 1
+            if self.calls == self.fail_on:
+                raise self.exc
+            ids = [e["id"] for e in json.loads(kw["messages"][0]["content"].split("\n", 1)[1])]
+            return type(
+                "R",
+                (),
+                {
+                    "parsed_output": ScoreBatch(
+                        scores=[
+                            ScoredEvent(
+                                id=i,
+                                score=2,
+                                reason="crypto-only; not a fit",
+                                kind="networking",
+                                level="unclear",
+                            )
+                            for i in ids
+                        ]
+                    )
+                },
+            )()
+
+    def test_earlier_batches_keep_claudes_scores(self):
+        events = self._events()
+        scores = score_events(events, self.CONFIG, self.FailsOnBatch())
+        survived = [e for e in events if not scores[e.key].degraded]
+        assert [e.external_id for e in survived] == ["e0", "e1"]
+        assert all(scores[e.key].score == 2.0 for e in survived)
+        assert all(scores[e.key].reason == "crypto-only; not a fit" for e in survived)
+
+    def test_earlier_batches_keep_claudes_kind(self):
+        """`classify_kind` used to overwrite the kind Claude assigned."""
+        events = self._events()
+        score_events(events, self.CONFIG, self.FailsOnBatch())
+        assert [e.kind for e in events[:2]] == ["networking", "networking"]
+
+    def test_only_the_failed_batch_is_degraded(self):
+        events = self._events()
+        scores = score_events(events, self.CONFIG, self.FailsOnBatch())
+        degraded = sorted(e.external_id for e in events if scores[e.key].degraded)
+        assert degraded == ["e2", "e3"]
+
+    def test_a_later_batch_still_runs_after_an_earlier_one_fails(self):
+        """`continue`, not `break`: batch 3 must still be attempted."""
+        events = self._events(6)
+        client = self.FailsOnBatch(fail_on=1)
+        scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 3
+        degraded = sorted(e.external_id for e in events if scores[e.key].degraded)
+        assert degraded == ["e0", "e1"]
+
+    def test_rejected_events_are_not_queued_by_a_later_batch_failure(self, tmp_path):
+        """The end-to-end harm: Claude said 2/10, the fallback said 8.0, and
+        `_select` queued it."""
+        events = self._events()
+        scores = score_events(events, self.CONFIG, self.FailsOnBatch())
+        store = Store(tmp_path / "t.db")
+        selected = _select(events, scores, store, self.CONFIG, 99, dry_run=False)
+        seen = sorted(e.external_id for e in events if store.is_seen(e))
+        store.close()
+        assert selected == []
+        assert seen == ["e0", "e1"], "Claude's rejections should be final and recorded"
+
+    def test_an_auth_failure_still_aborts_every_batch(self):
+        """A bad key is bad for all of them; there is nothing to salvage, and
+        `score_events` keeps its existing handling."""
+        import anthropic
+
+        exc = anthropic.AuthenticationError(
+            "bad key",
+            response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
+            body=None,
+        )
+        events = self._events()
+        client = self.FailsOnBatch(fail_on=2, exc=exc)
+        scores = score_events(events, self.CONFIG, client)
+        assert all(scores[e.key].degraded for e in events)
+        assert client.calls == 2, "should abort, not keep trying every batch"
+
+    def test_the_failure_names_the_batch_in_the_log(self, caplog):
+        with caplog.at_level("ERROR"):
+            score_events(self._events(), self.CONFIG, self.FailsOnBatch())
+        assert any("batch 2 of 2 failed" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Review follow-up: weak build words must not outrank explicit networking words
+# ---------------------------------------------------------------------------
+
+
+class TestStrongAndWeakBuildSignals:
+    """Ranking every build word above networking fixed "Social Impact
+    Hackathon" and broke "Build Club Mixer". Strong words name the format
+    outright and earn the precedence; weak ones merely suggest building, and a
+    mixer will happily call itself a jam.
+    """
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # a strong word plus a networking word: the strong word wins
+            "Hackathon Demo Day",
+            "Social Impact Hackathon 2026",
+            "Datathon Networking Session",
+            "Hack&Roll Mixer",
+        ],
+    )
+    def test_strong_words_beat_networking_words(self, title):
+        assert classify_kind(make_event(title=title)) == "hackathon"
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # a weak word plus a networking word: networking wins
+            "Build Club Mixer",
+            "Founders Mixer: Build Night",
+            "Pitch Competition & Networking Night",
+            "Startup Networking Challenge Night",
+            "Demo Day Jam Session",
+            "Founders Breakfast: Build in Public",
+            "AI Builders Mixer",
+            "Workshop and Networking Evening",
+        ],
+    )
+    def test_networking_words_beat_weak_build_words(self, title):
+        kind = classify_kind(make_event(title=title))
+        assert kind == "networking", f"{title!r} classified {kind!r} and would post at the base bar"
+
+    @pytest.mark.parametrize(
+        "title",
+        [
+            # a weak word and no networking word: the weak word is enough
+            "Build with AI: Gemini Developer Day",
+            "AWS DeepRacer Student League",
+            "AI Workshop: Build an Agent",
+            "Anthropic Builder Workshop Singapore",
+            "Women Who Code Workshop: LLM Fine-tuning",
+            "Global Game Jam",
+            "Weekend Build Sprint",
+        ],
+    )
+    def test_weak_build_words_still_classify_when_nothing_contradicts_them(self, title):
+        assert classify_kind(make_event(title=title)) == "hackathon"
+
+    def test_program_words_still_outrank_networking(self):
+        assert classify_kind(make_event(title="Accelerator Demo Day")) == "program"
+
+    def test_the_two_tiers_do_not_overlap(self):
+        """A word in both would make the precedence meaningless."""
+        for probe in ("hackathon", "datathon", "buildathon", "hack"):
+            assert filtering.STRONG_HACKATHON_RE.search(probe)
+            assert not filtering.WEAK_BUILD_RE.search(probe)
+        for probe in ("build", "jam", "league", "challenge", "competition", "workshop", "sprint"):
+            assert filtering.WEAK_BUILD_RE.search(probe)
+            assert not filtering.STRONG_HACKATHON_RE.search(probe)
+
+    def test_source_still_wins_over_a_networking_title(self):
+        """Devpost and MLH publish nothing but hackathons, whatever the title."""
+        assert classify_kind(make_event(title="Build Club Mixer", source="mlh")) == "hackathon"
+
+    def test_no_mingling_title_clears_the_bar_under_the_shipped_config(self):
+        """The end-to-end claim, against the real config rather than fixtures."""
+        import tomllib
+
+        with open(PROJECT_ROOT / "config.toml", "rb") as f:
+            interests = tomllib.load(f)["interests"]
+        leaked = []
+        for title in (
+            "Build Club Mixer",
+            "Founders Mixer: Build Night",
+            "Pitch Competition & Networking Night",
+            "Startup Networking Challenge Night",
+            "Demo Day Jam Session",
+            "Founders Breakfast: Build in Public",
+        ):
+            event = make_event(title=title, source="luma")
+            result = score_events([event], {"interests": interests, "scoring": {}}, None)[event.key]
+            threshold = interests["min_score_by_kind"].get(event.kind, interests["min_score"])
+            if result.score >= threshold:
+                leaked.append(f"{title} ({event.kind} {result.score})")
+        assert leaked == []
+
+
+class TestDegradedEventsNeverReachTheQueue:
+    """PROJECT.md promises "degraded scoring is never final". `store.queue_event`
+    writes the same `events` table `is_seen` reads, so a queued event is as
+    final as a recorded one -- the promise has to cover passes, not just skips.
+
+    The examples are the reviewer's: off-profile events that clear the base bar
+    on classification alone once KIND_SIGNAL_BONUS is applied.
+    """
+
+    OFF_PROFILE = [
+        ("Solana Grizzlython", "devpost"),
+        ("Crypto Trading League", "luma"),
+        ("DeFi Yield Farming Jam", "luma"),
+    ]
+
+    def _real_interests(self):
+        import tomllib
+
+        with open(PROJECT_ROOT / "config.toml", "rb") as f:
+            return tomllib.load(f)["interests"]
+
+    @pytest.mark.parametrize("title,source", OFF_PROFILE)
+    def test_an_outage_does_not_queue_them(self, tmp_path, title, source):
+        interests = self._real_interests()
+        config = {"interests": interests, "scoring": {}, "notify": {}}
+        event = make_event(title=title, source=source)
+        scores = score_events([event], config, _Explodes())
+        assert scores[event.key].degraded is True
+
+        store = Store(tmp_path / "t.db")
+        selected = _select([event], scores, store, config, 99, dry_run=False)
+        seen = store.is_seen(event)
+        store.close()
+        assert selected == [], f"{title!r} was queued for posting on a degraded run"
+        assert seen is False, f"{title!r} was buried without Claude ever seeing it"
+
+    def test_a_whole_fetch_is_deferred_not_queued(self, tmp_path):
+        """The scale of it: one 529 could queue up to max_per_day unvetted
+        events, which then drip out over the following hours."""
+        interests = self._real_interests()
+        config = {"interests": interests, "scoring": {}, "notify": {}}
+        events = [
+            make_event(title=f"Crypto Trading League {i}", source="luma", external_id=str(i))
+            for i in range(15)
+        ]
+        scores = score_events(events, config, _Explodes())
+        store = Store(tmp_path / "t.db")
+        selected = _select(events, scores, store, config, cap=15, dry_run=False)
+        seen = [e for e in events if store.is_seen(e)]
+        store.close()
+        assert selected == []
+        assert seen == []
+
+    def test_ingest_queues_nothing_during_an_outage(self, tmp_path, monkeypatch):
+        """Through `_ingest`, since that is what actually calls queue_event."""
+        interests = self._real_interests()
+        config = {
+            "interests": interests,
+            "scoring": {},
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": 15},
+        }
+        events = [make_event(title=t, source=s) for t, s in self.OFF_PROFILE]
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: _Explodes())
+        store = Store(tmp_path / "t.db")
+        cli._ingest(config, store)
+        depth = store.queue_depth()
+        store.close()
+        assert depth == 0, "an outage queued unvetted events"

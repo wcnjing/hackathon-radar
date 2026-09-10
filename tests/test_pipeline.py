@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from hackathon_radar import cli
 from hackathon_radar.filtering import (
     KEYWORD_REASON_PREFIX,
     classify_kind,
@@ -792,14 +793,42 @@ class TestIssue4KeywordFallbackKind:
             assert event.kind == "networking", f"{label}: kind was {event.kind!r}"
             assert not self._posts(event, score), f"{label}: posted at {score}"
 
-    def test_genuine_hackathon_still_posts_on_degraded_paths(self):
-        """The cap must not punish events that aren't networking."""
+    def test_genuine_hackathon_is_not_held_below_its_bar(self):
+        """The hold-down must only punish networking kinds, never hackathons.
+
+        This asserts the *score*, not that the event posts. Whether it posts is
+        `_select`'s call and depends on the mode: see the two tests below.
+        """
         for label, client in self._degraded_clients():
             event = make_event(title="AI Student Hackathon", location="Singapore")
             scores = score_events([event], self.CONFIG, client)
             score = scores[event.key].score
             assert event.kind == "hackathon", f"{label}: kind was {event.kind!r}"
-            assert self._posts(event, score), f"{label}: blocked at {score}"
+            assert self._posts(event, score), f"{label}: held down to {score}"
+
+    def test_keyword_only_mode_posts_it(self, tmp_path):
+        """No client is a supported deployment, not an outage, so its scores are
+        this install's real answer and act like any other."""
+        event = make_event(title="AI Student Hackathon", location="Singapore")
+        scores = score_events([event], self.CONFIG, None)
+        store = Store(tmp_path / "t.db")
+        selected = cli._select([event], scores, store, self.CONFIG, 99, dry_run=False)
+        store.close()
+        assert [e.title for e in selected] == ["AI Student Hackathon"]
+
+    def test_a_degraded_run_defers_it_instead_of_posting(self, tmp_path):
+        """Clearing the bar is not enough when the score is a guess. A keyword
+        score can outrank the one it stands in for, so `_select` defers the
+        whole decision rather than acting on the optimistic half of it."""
+        event = make_event(title="AI Student Hackathon", location="Singapore")
+        scores = score_events([event], self.CONFIG, self._Explodes())
+        assert self._posts(event, scores[event.key].score), "premise: it clears the bar"
+        store = Store(tmp_path / "t.db")
+        selected = cli._select([event], scores, store, self.CONFIG, 99, dry_run=False)
+        seen = store.is_seen(event)
+        store.close()
+        assert selected == []
+        assert seen is False
 
     def test_claude_success_path_is_untouched(self):
         """Acceptance criterion 3: when Claude scores, its kind and score win —
