@@ -112,17 +112,25 @@ guard, cap) → enrichment (Devpost pages: team size, deadline, expandable brief
 
 **Scoring determinism:** `temperature=0`, batch composition sorted by event key
 so an event's batch-mates don't depend on fetch order, and a content-addressed
-cache (`data/score_cache.json`, persisted by the Actions cache; bypass with
-`RADAR_NO_SCORE_CACHE=1`) keyed on schema version + model + profile + batch, so
-any real change busts it. Near-zero hit rate on the ingest path by design — its
-value is free repeat scoring for calibration, and not re-billing after a crash.
+cache (`.cache/score_cache.json`, LRU-evicted; bypass with
+`RADAR_NO_SCORE_CACHE=1`, relocate with `RADAR_SCORE_CACHE_PATH`) keyed on
+schema version + model + profile + batch, so any real change busts it. Near-zero
+hit rate on the ingest path by design — its value is free repeat scoring for
+calibration, and not re-billing after a crash — which is why it is kept out of
+`data/` and is not persisted by the Actions cache.
 
 **Degraded scoring is never final.** When Claude was expected but failed, scores
 are tagged `degraded` and `_select` leaves skipped events *unrecorded*, so the
 next ingest re-scores them. `store.record` writes the table `is_seen` reads, so
 recording a guess would bury the event permanently — one transient 529 would
 have cost a whole fetch. Running with no API key at all is a supported mode and
-is *not* degraded: those scores are that deployment's real answer.
+is *not* degraded: those scores are that deployment's real answer. Because they
+are final, the raised networking bar applies only when the keyword classifier
+actually matched a networking word; a title that matched nothing is networking
+only by default and is judged at the base bar. Events an outage deferred are
+also not buried at the daily cap on recovery: over-cap ones are held for the
+next ingest, so the backlog spreads across runs (events never deferred are
+still recorded over the cap — that is the lost-DB guardrail).
 
 **Guardrails:** seen-DB; score thresholds (6, networking 8); 30-min drip;
 15/day rolling cap; 60-day repeat-title guard; full-event filter; quiet hours

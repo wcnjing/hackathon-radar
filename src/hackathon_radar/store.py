@@ -23,12 +23,24 @@ CREATE TABLE IF NOT EXISTS events (
 
 META_SCHEMA = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
 
+# Events a degraded scoring run left undecided. Deliberately not `events`:
+# `is_seen` reads that table, and the whole point of deferring is that the
+# event stays unseen so the next run re-scores it.
+DEFERRED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS deferred (
+    source      TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    PRIMARY KEY (source, external_id)
+)
+"""
+
 
 class Store:
     def __init__(self, path: Path | str):
         self.conn = sqlite3.connect(path)
         self.conn.execute(SCHEMA)
         self.conn.execute(META_SCHEMA)
+        self.conn.execute(DEFERRED_SCHEMA)
         self._migrate()
         self.conn.commit()
 
@@ -52,7 +64,27 @@ class Store:
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (*event.key, event.title, event.url, _now(), score, reason),
         )
+        self._clear_deferred(event)
         self.conn.commit()
+
+    # -- deferred by a degraded scoring run --------------------------------------
+
+    def mark_deferred(self, event: Event) -> None:
+        """Remember that a degraded run left this event undecided."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO deferred (source, external_id) VALUES (?, ?)", event.key
+        )
+        self.conn.commit()
+
+    def was_deferred(self, event: Event) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM deferred WHERE source = ? AND external_id = ?", event.key
+        ).fetchone()
+        return row is not None
+
+    def _clear_deferred(self, event: Event) -> None:
+        # Once an event is decided either way the marker has done its job.
+        self.conn.execute("DELETE FROM deferred WHERE source = ? AND external_id = ?", event.key)
 
     # -- notification queue ----------------------------------------------------
 
@@ -64,6 +96,7 @@ class Store:
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (*event.key, event.title, event.url, _now(), score, reason, json.dumps(asdict(event))),
         )
+        self._clear_deferred(event)
         self.conn.commit()
 
     def pop_queued(self) -> tuple[Event, float, str] | None:

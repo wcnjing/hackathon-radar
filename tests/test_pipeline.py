@@ -1084,9 +1084,9 @@ class TestIssue8ScoringCache:
     """Issue #8 acceptance criterion 1: "scoring the same batch twice returns
     identical scores and kinds".
 
-    temperature=0 cannot deliver this — measured 4/5 events stable, the residual
-    being server-side floating-point on shared hardware, which no API parameter
-    reaches. So determinism is bought at our layer: the batch request is
+    temperature=0 alone does not deliver this: scores were seen to drift by a
+    point between identical requests (observed informally; see the note on
+    SCORING_TEMPERATURE). So determinism is bought at our layer: the batch request is
     content-addressed and its scores stored, making score_events a pure function
     of its input even though the model underneath is not."""
 

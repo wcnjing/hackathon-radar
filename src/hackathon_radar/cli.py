@@ -1,11 +1,10 @@
 import argparse
 import logging
-import os
 import sys
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from hackathon_radar.config import db_path, load_config
+from hackathon_radar.config import db_path, env_flag, load_config
 from hackathon_radar.enrich import enrich_events
 from hackathon_radar.filtering import in_scope, normalize_title
 from hackathon_radar.notify import (
@@ -65,7 +64,7 @@ def _collect(config: dict, store: Store):
 
 
 def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
-    """Rank new events and pick the ones worth posting; records the rest.
+    """Rank new events and pick the ones worth posting; records the rejects.
 
     Degraded events are the exception, and they are acted on in neither
     direction: not posted, not recorded, just left for the next run.
@@ -84,6 +83,18 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     and a fail-open in the other.
 
     Both cost the same thing: a re-fetch and a re-score next run.
+
+    Deferral has a cost that lands later, at the cap. Every run of an outage
+    defers its events, so the first healthy run meets the whole backlog at once
+    and — recording everything past the cap, as it normally does — would bury
+    most of it in a single pass. So an event that was deferred earlier is not
+    recorded when it is over the cap: it is held and competes again next run,
+    spreading the backlog across runs. Being 16th in a run with room for 15 is
+    a fact about the queue, not a judgement of the event.
+
+    Only for events that were deferred, though. For everything else, recording
+    over-cap events is the guardrail that turns a lost or evicted DB into one
+    bounded day of posts rather than a replay of the whole backlog.
     """
     interests = config.get("interests", {})
     min_score = interests.get("min_score", 6)
@@ -118,14 +129,24 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
             # before the threshold so a guess can neither post nor be buried.
             deferred += 1
             log.info("defer (degraded, will re-score next run): %s", event.title)
+            if not dry_run:
+                store.mark_deferred(event)
             continue
-        threshold = min_by_kind.get(event.kind, min_score)
+        # A raised per-kind bar is policy about events *known* to be of that
+        # kind. A fallback kind nothing matched is a default, not a finding, so
+        # it is judged at the base bar instead (see `ScoreResult.kind_guessed`).
+        threshold = min_score if result.kind_guessed else min_by_kind.get(event.kind, min_score)
         if score < threshold:
             log.info("skip (score %.0f < %d for %s): %s", score, threshold, event.kind, event.title)
             if not dry_run:
                 store.record(event, score, reason)
             continue
         if len(selected) >= cap:
+            if store.was_deferred(event):
+                # Not recorded: it stays new, so the next ingest re-scores it
+                # and it competes again for the room the queue has then.
+                log.info("hold (over cap, deferred earlier; retried next run): %s", event.title)
+                continue
             log.info("skip (over cap): %s", event.title)
             if not dry_run:
                 store.record(event, score, reason)
@@ -152,7 +173,8 @@ def _ingest(config: dict, store: Store) -> None:
     """Fetch, score, enrich, and queue notification-worthy events."""
     new, scores, client = _collect(config, store)
     # The daily cap bounds how much one ingest may queue; anything beyond it
-    # is recorded as seen (same policy as the old per-run cap).
+    # is recorded as seen (same policy as the old per-run cap), except events
+    # an outage deferred, which are held for the next ingest — see `_select`.
     cap = config.get("notify", {}).get("max_per_day", 15)
     selected = _select(new, scores, store, config, cap, dry_run=False)
 
@@ -263,7 +285,7 @@ def run(args: argparse.Namespace) -> int:
     if last_fetch:
         elapsed = (_now() - datetime.fromisoformat(last_fetch)).total_seconds()
         fetch_due = elapsed >= fetch_every * 3600 - 600  # 10 min scheduling tolerance
-        if os.environ.get("RADAR_FORCE_FETCH", "").lower() in ("1", "true"):
+        if env_flag("RADAR_FORCE_FETCH"):
             fetch_due = True
         if not fetch_due:
             log.info("fetch not due (%.0f min since last); drain-only run", elapsed / 60)

@@ -15,6 +15,15 @@ def load_config(path: Path | None = None) -> dict:
         return tomllib.load(f)
 
 
+def env_flag(name: str) -> bool:
+    """True when `name` is set to anything a person would mean as "on".
+
+    One definition for every RADAR_* switch: a flag that honours `=1` but
+    silently ignores `=yes` looks set and does nothing.
+    """
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def db_path() -> Path:
     data_dir = PROJECT_ROOT / "data"
     data_dir.mkdir(exist_ok=True)

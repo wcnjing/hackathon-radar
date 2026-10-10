@@ -106,20 +106,23 @@ gh run watch                                    # watch it
 
 ### Scoring cache
 
-Claude's scores are cached in `data/score_cache.json`, keyed on a hash of the
+Claude's scores are cached in `.cache/score_cache.json`, keyed on a hash of the
 model, the interest profile, and the exact batch of events sent. Editing the
 profile or changing the model busts every key automatically, so a stale answer
 can never hide a change you meant to make.
 
 | Env var | Effect |
 |---|---|
-| `RADAR_NO_SCORE_CACHE=1` | Bypass the cache and re-ask the model. Use it to check whether the model itself has drifted. |
+| `RADAR_NO_SCORE_CACHE=1` | Bypass the cache and re-ask the model. Use it to check whether the model itself has drifted. `true`, `yes` and `on` work too. |
+| `RADAR_SCORE_CACHE_PATH=<file>` | Keep the cache somewhere other than `.cache/score_cache.json`. |
 
-The cache lives in `data/`, which the Actions cache persists between runs
-alongside the events DB. On the ingest path it rarely hits — only unseen events
-get scored, so the same batch seldom recurs. It earns its keep by making repeat
-scoring of a fixed set free, which is what the calibration harness needs, and by
-not re-billing batches that already succeeded when a run crashes partway.
+On the ingest path the cache rarely hits — only unseen events get scored, so the
+same batch seldom recurs. It earns its keep by making repeat scoring of a fixed
+set free, which is what the calibration harness needs, and by not re-billing
+batches that already succeeded when a run crashes partway. That is why it lives
+in `.cache/` rather than `data/`: the Actions cache persists `data/` on every
+run, and a file that never hits there would only cost transfer. It holds the
+500 most recently used batches.
 
 The seen-events DB is persisted between runs via the Actions cache. Quirks: scheduled
 runs can start a few minutes late, and GitHub pauses schedules on repos with no

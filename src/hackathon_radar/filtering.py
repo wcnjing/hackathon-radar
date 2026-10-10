@@ -65,8 +65,9 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
 
     The second element is False when no rule fired and the default was used.
     Callers need that distinction: "this is a hackathon because it says
-    buildathon" and "this might be anything, so assume the stricter bar" are
-    very different claims, and only the first is evidence about the event.
+    buildathon" and "this might be anything, so call it networking" are very
+    different claims, and only the first is evidence about the event. A caller
+    must not apply a raised per-kind bar on the strength of the second.
 
     Claude overrides all of this when available; it only runs when Claude isn't.
 
@@ -103,12 +104,13 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
         return "networking", True
     if WEAK_BUILD_RE.search(haystack):
         return "hackathon", True
-    # No signal either way. Defaulting to networking is the cautious read: it
-    # applies the higher bar to something we cannot vouch for. That is only
-    # tolerable because a degraded-path score is no longer final — `cli._select`
-    # leaves such events unrecorded so the next run re-scores them with Claude
-    # (see `scoring.ScoreResult.degraded`). Without that, this default would
-    # permanently bury every event it guessed wrong about.
+    # No signal either way. "networking" is the likeliest label for an event
+    # that names no format, but it is a default, not a classification, and the
+    # False says so. It must not earn the raised networking bar: on a
+    # keyword-only deployment the fallback score is final, so judging a guess
+    # at 8 instead of 6 would permanently bury every event it guessed wrong
+    # about. `scoring._fallback_score` passes the False on as
+    # `ScoreResult.kind_guessed`, and `cli._select` then uses the base bar.
     return "networking", False
 
 

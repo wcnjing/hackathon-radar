@@ -41,6 +41,12 @@ jobs:
           key: radar-db-${{ github.run_id }}
           restore-keys: radar-db-
 
+      # The score cache used to live in data/ and so sits in every saved copy
+      # of it. It is no longer read from there; without this it would be
+      # restored and re-uploaded on every run for as long as the cache lives.
+      - name: Drop the legacy score cache
+        run: rm -f data/score_cache.json
+
       - name: Run radar
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}

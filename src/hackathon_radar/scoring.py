@@ -4,11 +4,12 @@ import hashlib
 import json
 import logging
 import os
+from pathlib import Path
 from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, ValidationError
 
-from hackathon_radar.config import PROJECT_ROOT
+from hackathon_radar.config import PROJECT_ROOT, env_flag
 from hackathon_radar.filtering import Kind, classify_kind_with_signal, keyword_score
 from hackathon_radar.models import Event
 
@@ -21,16 +22,17 @@ log = logging.getLogger(__name__)
 #
 # This reduces variance but does NOT eliminate it, and the SDK says as much:
 # "even with temperature of 0.0, the results will not be fully deterministic".
-# Measured over a 25-event fixture scored in fresh processes with the cache
-# below disabled: only 15/25 events held a stable score (89.6% agreement), one
-# event's *kind* flipped between hackathon and networking, and two events' levels
-# moved. Scores drifted by a single point — exactly enough to flip a post/skip
-# decision for an event sitting on a threshold.
+# Observed informally while building this, not measured by anything checked in
+# (the calibration harness in #10 is what will put a number on it): re-scoring
+# a small fixed set in fresh processes with the cache below disabled did not
+# hold every score stable. Some drifted by a single point — exactly enough to
+# flip a post/skip decision for an event sitting on a threshold — and a kind
+# and a level were each seen to flip.
 #
-# top_k=1 (greedy decoding) was tried over 20 runs and made no reliable
-# difference, so it is deliberately not set: the residual is server-side
-# floating-point on shared hardware, not sampling, and no API parameter reaches
-# it. Do not re-add it expecting a fix.
+# top_k=1 (greedy decoding) was tried informally too and made no visible
+# difference, so it is deliberately not set. The likely residual is server-side
+# floating-point on shared hardware rather than sampling, which no API
+# parameter reaches. Do not re-add it expecting a fix.
 SCORING_TEMPERATURE = 0.0
 
 # One keyword hit is worth 1.5 in `keyword_score`; a confident kind
@@ -55,9 +57,17 @@ KIND_SIGNAL_BONUS = 1.5
 # fixed set over and over, and a crash mid-run does not re-bill the batches that
 # already succeeded.
 #
-# Set RADAR_NO_SCORE_CACHE=1 to bypass it and see what the model says today.
-CACHE_PATH = PROJECT_ROOT / "data" / "score_cache.json"
-CACHE_LIMIT = 500  # entries; oldest evicted first
+# Which is why it does not live in `data/`. The radar workflow persists that
+# directory through the Actions cache on every run, and a file that never hits
+# there would be uploaded and downloaded 48 times a day for nothing. Nothing is
+# lost by the cache and the DB no longer rolling back together on a failed job:
+# entries are content-addressed, so one the DB has "forgotten" is still the
+# right answer to the same question.
+#
+# Set RADAR_NO_SCORE_CACHE=1 to bypass it and see what the model says today, or
+# RADAR_SCORE_CACHE_PATH to keep it somewhere else.
+CACHE_PATH = PROJECT_ROOT / ".cache" / "score_cache.json"
+CACHE_LIMIT = 500  # entries; least recently used evicted first
 
 # Bumped whenever `ScoredEvent` changes shape. Rows are stored as plain dicts,
 # so adding, renaming or retyping a field leaves every existing row unparseable.
@@ -67,7 +77,14 @@ CACHE_SCHEMA_VERSION = "1"
 
 
 def _cache_enabled() -> bool:
-    return os.environ.get("RADAR_NO_SCORE_CACHE", "").lower() not in ("1", "true")
+    return not env_flag("RADAR_NO_SCORE_CACHE")
+
+
+def _cache_path() -> Path:
+    # Read per call, not at import: `.env` is loaded by `load_config`, which
+    # runs after this module is imported.
+    override = os.environ.get("RADAR_SCORE_CACHE_PATH", "").strip()
+    return Path(override) if override else CACHE_PATH
 
 
 def _cache_key(model: str, system: str, payload: str) -> str:
@@ -80,7 +97,7 @@ def _cache_key(model: str, system: str, payload: str) -> str:
 
 def _cache_load() -> dict:
     try:
-        return json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+        data = json.loads(_cache_path().read_text(encoding="utf-8"))
     # Reads like Python 2 but is valid here: PEP 758 (3.14) permits
     # unparenthesized `except` tuples, and requires-python is ">=3.14". The
     # parentheses cannot be kept for readability -- `ruff format` strips them,
@@ -88,6 +105,11 @@ def _cache_load() -> dict:
     # this, not the UP lint rule; `ruff check` accepts either form.)
     except OSError, ValueError:
         return {}  # missing or corrupt: behave as a cold cache, never crash
+    # Valid JSON of the wrong shape is corrupt too. A list or a null here would
+    # raise AttributeError on the first lookup, escape into `score_events`'
+    # blanket handler and mark every event degraded — so nothing posts and
+    # nothing is recorded, on every run, until someone deletes the file.
+    return data if isinstance(data, dict) else {}
 
 
 def _cache_read(cache: dict, key: str) -> list[ScoredEvent] | None:
@@ -103,10 +125,16 @@ def _cache_read(cache: dict, key: str) -> list[ScoredEvent] | None:
     if rows is None:
         return None
     try:
-        return [ScoredEvent(**row) for row in rows]
+        scored = [ScoredEvent(**row) for row in rows]
     except (TypeError, ValidationError) as exc:
         log.warning("discarding unreadable score-cache entry (%s); re-scoring", exc)
         return None
+    # A hit moves the entry to the young end, so eviction is least-recently-used
+    # rather than oldest-written: a calibration set bigger than CACHE_LIMIT must
+    # not have the batches it is actively re-reading evicted from under it.
+    # This only reorders the dict in hand; `_claude_scores` writes it back.
+    cache[key] = cache.pop(key)
+    return scored
 
 
 def _cache_store(cache: dict, key: str, scored: list[dict]) -> None:
@@ -115,15 +143,20 @@ def _cache_store(cache: dict, key: str, scored: list[dict]) -> None:
     if len(cache) > CACHE_LIMIT:
         for stale in list(cache)[: len(cache) - CACHE_LIMIT]:
             del cache[stale]
+    _cache_write(cache)
+
+
+def _cache_write(cache: dict) -> None:
     try:
-        CACHE_PATH.parent.mkdir(exist_ok=True)
+        path = _cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         # Write-then-rename: `write_text` truncates first, so a crash or a
         # concurrent reader mid-write would see a half-file. os.replace is
         # atomic on the same filesystem, so readers see either the old cache or
         # the new one and never a partial one.
-        tmp = CACHE_PATH.with_suffix(f".{os.getpid()}.tmp")
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
         tmp.write_text(json.dumps(cache), encoding="utf-8")
-        os.replace(tmp, CACHE_PATH)
+        os.replace(tmp, path)
     except OSError as exc:
         log.warning("could not write score cache: %s", exc)
 
@@ -170,13 +203,19 @@ class ScoreResult(NamedTuple):
     second is a reason to leave the event unrecorded so a later run can
     re-score it; see `cli._select`.
 
+    `kind_guessed` is True when the keyword fallback had nothing to classify
+    the event by and `event.kind` is only the classifier's default. A raised
+    per-kind threshold must not be applied to it; see `cli._select`.
+
     A NamedTuple so `scores[key][0]` and `[1]` keep working for every existing
-    reader, while the flag is available by name to the one caller that needs it.
+    reader, while the flags are available by name to the one caller that needs
+    them.
     """
 
     score: float
     reason: str
     degraded: bool = False
+    kind_guessed: bool = False
 
 
 def _event_payload(event: Event) -> dict:
@@ -204,8 +243,15 @@ def _fallback_score(event: Event, interests: dict, degraded: bool = False) -> Sc
 
     A raised per-kind threshold means "only exceptional events of this kind get
     posted", and exceptional is a judgement counting keywords cannot make. So
-    when the fallback puts an event in a kind whose bar is raised, its score is
-    held below that bar: it cannot post on keyword hits alone.
+    when the fallback *classifies* an event into a kind whose bar is raised, its
+    score is held below that bar: it cannot post on keyword hits alone.
+
+    That applies only when something actually matched. A title with no signal
+    gets the classifier's default kind, and a default is not grounds for the
+    raised bar: the result is flagged `kind_guessed` and judged at the base
+    `min_score`. This matters because with no client the score is final — a
+    guess held to the networking bar would be recorded and never looked at
+    again.
 
     Note what this does *not* decide. Whether a held-down event is recorded as
     seen — and so never reconsidered — is `cli._select`'s call, and it turns on
@@ -235,10 +281,10 @@ def _fallback_score(event: Event, interests: dict, degraded: bool = False) -> Sc
         reason = f"{reason} (+{event.kind} title)"
 
     raised = interests.get("min_score_by_kind", {}).get(event.kind)
-    if raised is not None and raised > min_score and score >= raised:
+    if matched and raised is not None and raised > min_score and score >= raised:
         score = float(raised) - 1.0
         reason = f"{reason} (held below the {event.kind} bar: no Claude scoring)"
-    return ScoreResult(score, reason, degraded)
+    return ScoreResult(score, reason, degraded, kind_guessed=not matched)
 
 
 def _fallback_scores(
@@ -320,6 +366,7 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
     # because every prompt is recomposed. Anything comparing scores across runs
     # (see the calibration work in #10) must therefore hold batch_size fixed.
     ordered = sorted(events, key=lambda e: e.key)
+    unsaved_hits = False
 
     for i in range(0, len(ordered), batch_size):
         batch = ordered[i : i + batch_size]
@@ -329,6 +376,7 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
         scored_batch = _cache_read(cache, key) if _cache_enabled() else None
         if scored_batch is not None:
             log.info("scoring cache hit (%d event(s))", len(scored_batch))
+            unsaved_hits = True
         else:
             try:
                 response = client.messages.parse(
@@ -373,6 +421,7 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
                 )
             elif _cache_enabled():
                 _cache_store(cache, key, [s.model_dump() for s in scored_batch])
+                unsaved_hits = False
 
         for scored in scored_batch:
             event = by_id.get(scored.id)
@@ -380,6 +429,13 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
                 results[event.key] = ScoreResult(float(scored.score), scored.reason.strip())
                 event.kind = scored.kind
                 event.level = None if scored.level == "unclear" else scored.level
+
+    if unsaved_hits:
+        # A hit changes which entries are recently used but writes nothing, and
+        # each run starts from the file. Without this the recency would be
+        # forgotten at exit and eviction would quietly be oldest-written again.
+        # Once per call rather than per hit: the file can be megabytes.
+        _cache_write(cache)
 
     # Whatever has no score by now falls back to the keyword scorer: events the
     # model omitted from an otherwise good answer, and every event in a batch

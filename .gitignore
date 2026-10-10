@@ -12,4 +12,5 @@ wheels/
 # hackathon-radar
 .env
 data/
+.cache/
 logs/
