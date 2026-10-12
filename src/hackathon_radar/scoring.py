@@ -293,6 +293,16 @@ def _fallback_scores(
     return {e.key: _fallback_score(e, interests, degraded) for e in events}
 
 
+def degraded_scores(events: list[Event], config: dict) -> dict[tuple[str, str], ScoreResult]:
+    """Keyword scores for a run where Claude was expected and is unavailable.
+
+    For the caller that knows this before a single request is made — a
+    configured client that could not be built. Every result is degraded, so
+    `cli._select` neither posts nor records any of it.
+    """
+    return _fallback_scores(events, config.get("interests", {}), degraded=True)
+
+
 def score_events(
     events: list[Event], config: dict, client=None
 ) -> dict[tuple[str, str], ScoreResult]:
@@ -306,23 +316,39 @@ def score_events(
         # this deployment's real answer and are recorded like any other. Marking
         # them degraded would mean a keyword-only install never records anything
         # and re-scores its whole backlog every half hour, forever.
+        #
+        # None must mean "nothing is configured" and only that. A configured
+        # client that failed to build is an outage: `make_client` raises for it
+        # and the caller uses `degraded_scores` instead.
         return _fallback_scores(events, interests)
-
-    import anthropic
 
     try:
         return _claude_scores(client, events, config)
-    except anthropic.AuthenticationError as exc:
-        # Credentials were offered and rejected: transient or fixable, either
-        # way not this deployment's intended mode. Degraded.
-        log.warning("Anthropic auth failed (%s); using keyword scorer (degraded)", exc.message)
-        return _fallback_scores(events, interests, degraded=True)
     except Exception:
+        # `_claude_scores` contains API failures to their own batch, so this is
+        # only reached by something unforeseen. Degrade the run rather than
+        # crash it.
         log.exception("Claude scoring call failed, using keyword scorer (degraded)")
         return _fallback_scores(events, interests, degraded=True)
 
 
 def make_client():
+    """An Anthropic client, or None when no credentials are configured at all.
+
+    The two ways of having no client mean opposite things downstream, so they
+    must not share a return value:
+
+    - None: nothing is configured. Keyword-only is this deployment's mode and
+      its scores are final.
+    - raises: something is configured and the client still could not be built
+      (a malformed proxy or base URL, a named profile that does not exist).
+      That is an outage; the caller scores degraded and nothing is posted or
+      recorded.
+
+    A broken proxy raises even with no credentials configured, since the SDK
+    builds its transport before anything here can look. That reads as an outage
+    rather than as keyword-only, which errs towards not acting on guesses.
+    """
     import anthropic
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -331,9 +357,41 @@ def make_client():
         # ANTHROPIC_AUTH_TOKEN lingers in the environment the SDK would send
         # both credentials and the API rejects the request.
         return anthropic.Anthropic(api_key=api_key, auth_token=None)
-    # Otherwise let the SDK resolve ANTHROPIC_AUTH_TOKEN or an
-    # `ant auth login` profile; no credentials raises at construction.
-    return anthropic.Anthropic()
+    # Otherwise let the SDK resolve ANTHROPIC_AUTH_TOKEN, an `ant auth login`
+    # profile or workload identity. Finding none of them is not an error to the
+    # SDK: it returns a client that fails on its first request. Left alone that
+    # would turn every keyword-only install — and an unset Actions secret, which
+    # arrives as an empty string — into a permanent outage.
+    client = anthropic.Anthropic()
+    if client.api_key or client.auth_token or getattr(client, "credentials", None):
+        return client
+    return None
+
+
+def _event_id(event: Event) -> str:
+    return f"{event.source}:{event.external_id}"
+
+
+def _rows_by_id(
+    scored: list[ScoredEvent], expected: set[str]
+) -> tuple[dict[str, ScoredEvent], bool]:
+    """The rows that can be trusted, and whether they answer the whole batch.
+
+    A batch is an answer only if it has exactly one row for every id that was
+    asked about and nothing else. Counting rows is not that check: three rows
+    for a batch of three passes it while naming one event three times.
+
+    A row is usable when its id was asked about and appears once. An id that
+    appears twice is dropped entirely — there is no telling which score was
+    meant — and a foreign id is ignored. Usable rows from an incomplete batch
+    are still worth having for this run; they are just not worth caching.
+    """
+    counts: dict[str, int] = {}
+    for row in scored:
+        counts[row.id] = counts.get(row.id, 0) + 1
+    usable = {row.id: row for row in scored if row.id in expected and counts[row.id] == 1}
+    complete = len(scored) == len(expected) and len(usable) == len(expected)
+    return usable, complete
 
 
 def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str, str], ScoreResult]:
@@ -344,7 +402,12 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
     model = scoring_cfg.get("model", "claude-haiku-4-5")
     batch_size = scoring_cfg.get("batch_size", 20)
     system = SYSTEM_PROMPT.format(profile=interests.get("profile", "").strip())
-    by_id = {f"{e.source}:{e.external_id}": e for e in events}
+    # A list per id, not one event: two sources can hand over the same key, and
+    # a batch that names an id twice could never be answered one row per id.
+    # Each key is sent once and its score applied to every event that shares it.
+    by_id: dict[str, list[Event]] = {}
+    for event in events:
+        by_id.setdefault(_event_id(event), []).append(event)
     results: dict[tuple[str, str], ScoreResult] = {}
     # Read the cache once per call rather than twice per batch: at the 500-entry
     # limit that was re-parsing a multi-megabyte file for every 20 events.
@@ -365,19 +428,45 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
     # temperature 0, the same scores. Change `batch_size` and scores may move,
     # because every prompt is recomposed. Anything comparing scores across runs
     # (see the calibration work in #10) must therefore hold batch_size fixed.
-    ordered = sorted(events, key=lambda e: e.key)
-    unsaved_hits = False
+    ordered = sorted((group[0] for group in by_id.values()), key=lambda e: e.key)
+    batch_total = (len(ordered) + batch_size - 1) // batch_size
+    unsaved = False  # the cache in hand differs from the file
+    auth_failed = False
 
     for i in range(0, len(ordered), batch_size):
         batch = ordered[i : i + batch_size]
+        expected = {_event_id(e) for e in batch}
         payload = json.dumps([_event_payload(e) for e in batch], ensure_ascii=False)
 
         key = _cache_key(model, system, payload)
-        scored_batch = _cache_read(cache, key) if _cache_enabled() else None
-        if scored_batch is not None:
-            log.info("scoring cache hit (%d event(s))", len(scored_batch))
-            unsaved_hits = True
-        else:
+        rows: dict[str, ScoredEvent] | None = None
+        cached = _cache_read(cache, key) if _cache_enabled() else None
+        if cached is not None:
+            usable, complete = _rows_by_id(cached, expected)
+            unsaved = True  # a hit refreshed its recency; a bad entry is dropped
+            if complete:
+                log.info("scoring cache hit (%d event(s))", len(cached))
+                rows = usable
+            else:
+                # A stored batch that does not answer its own events — empty,
+                # short, an id repeated or foreign — is not a hit. Serving it
+                # would freeze the gap in place: the events it misses would
+                # fall to the keyword scorer on every identical run and never
+                # be asked about again. Drop it and ask.
+                log.warning(
+                    "discarding score-cache entry that does not answer its batch "
+                    "(%d row(s) for %d event(s)); re-scoring",
+                    len(cached),
+                    len(batch),
+                )
+                cache.pop(key, None)
+
+        if rows is None:
+            if auth_failed:
+                # Rejected credentials are rejected for every batch, so nothing
+                # more is sent. Batches the cache can answer are still served
+                # above, and this one falls to the `missing` tail below.
+                continue
             try:
                 response = client.messages.parse(
                     model=model,
@@ -387,10 +476,25 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
                     output_format=ScoreBatch,
                     temperature=SCORING_TEMPERATURE,
                 )
-            except anthropic.AuthenticationError:
-                # A bad key is bad for every batch; there is nothing to salvage.
-                # Let `score_events` handle it as it always has.
-                raise
+                # Inside the handler on purpose. The SDK types `parsed_output`
+                # as optional, and reading `.scores` off None out here would
+                # escape the loop and take every earlier batch down with it.
+                if response.parsed_output is None:
+                    raise ValueError("the response carried no parsed output")
+                scored_batch = response.parsed_output.scores
+            except anthropic.AuthenticationError as exc:
+                # Stop calling, keep what was scored. This used to re-raise, and
+                # `score_events` then keyword-scored the whole run — replacing
+                # answers Claude had already given for earlier batches.
+                auth_failed = True
+                log.warning(
+                    "Anthropic auth failed on batch %d of %d (%s); "
+                    "no further batches are sent this run (degraded)",
+                    i // batch_size + 1,
+                    batch_total,
+                    exc.message,
+                )
+                continue
             except Exception:
                 # Contain the failure to its own batch. Letting it escape the
                 # loop would discard the scores Claude already returned for
@@ -403,45 +507,47 @@ def _claude_scores(client, events: list[Event], config: dict) -> dict[tuple[str,
                 log.exception(
                     "batch %d of %d failed; its %d event(s) fall to the keyword scorer (degraded)",
                     i // batch_size + 1,
-                    (len(ordered) + batch_size - 1) // batch_size,
+                    batch_total,
                     len(batch),
                 )
                 continue
-            scored_batch = response.parsed_output.scores
-            if len(scored_batch) != len(batch):
-                # A short answer is a bad answer, and caching it would freeze it
-                # as this batch's permanent response: the missing events would
-                # drop to the keyword scorer on every future identical run, and
+            rows, complete = _rows_by_id(scored_batch, expected)
+            if not complete:
+                # A bad answer must not be cached: that would freeze it as this
+                # batch's permanent response, the events it misses would drop
+                # to the keyword scorer on every future identical run, and
                 # #10's calibration harness would treat the gap as ground truth.
-                # Use it for this run, but do not enshrine it.
+                # Use the rows that can be trusted for this run only.
                 log.warning(
-                    "model returned %d score(s) for a batch of %d; not caching this batch",
+                    "model returned %d row(s), %d usable, for a batch of %d; "
+                    "not caching this batch",
                     len(scored_batch),
+                    len(rows),
                     len(batch),
                 )
             elif _cache_enabled():
                 _cache_store(cache, key, [s.model_dump() for s in scored_batch])
-                unsaved_hits = False
+                unsaved = False
 
-        for scored in scored_batch:
-            event = by_id.get(scored.id)
-            if event is not None:
+        for scored in rows.values():
+            for event in by_id[scored.id]:
                 results[event.key] = ScoreResult(float(scored.score), scored.reason.strip())
                 event.kind = scored.kind
                 event.level = None if scored.level == "unclear" else scored.level
 
-    if unsaved_hits:
-        # A hit changes which entries are recently used but writes nothing, and
-        # each run starts from the file. Without this the recency would be
-        # forgotten at exit and eviction would quietly be oldest-written again.
-        # Once per call rather than per hit: the file can be megabytes.
+    if unsaved:
+        # A hit changes which entries are recently used, and a discarded entry
+        # is gone from the dict in hand, but neither writes anything and each
+        # run starts from the file. Without this the recency would be forgotten
+        # at exit and a bad entry would be re-read and re-discarded every run.
+        # Once per call rather than per batch: the file can be megabytes.
         _cache_write(cache)
 
     # Whatever has no score by now falls back to the keyword scorer: events the
-    # model omitted from an otherwise good answer, and every event in a batch
-    # whose call failed. Both are degraded — Claude answered for this run but
-    # not for these events, so the keyword score is a stand-in and the event
-    # deserves another look next run.
+    # model omitted or answered ambiguously, every event in a batch whose call
+    # failed, and every batch not sent after an auth failure. All are degraded —
+    # Claude did not answer for these events, so the keyword score is a
+    # stand-in and the event deserves another look next run.
     missing = [e for e in events if e.key not in results]
     if missing:
         log.warning("no model score for %d event(s); keyword-scoring them (degraded)", len(missing))

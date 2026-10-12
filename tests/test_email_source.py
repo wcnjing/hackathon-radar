@@ -1,8 +1,12 @@
 from email.message import EmailMessage
 
+from scoring_fakes import CONFIG, _Explodes, _ScoresEverything
+
+from hackathon_radar import cli
 from hackathon_radar.sources import email_source
 from hackathon_radar.sources.email_source import body_text, new_uids, to_event
 from hackathon_radar.sources.watchlist import PageEvent
+from hackathon_radar.store import Store
 
 
 def page_event(**overrides) -> PageEvent:
@@ -154,3 +158,120 @@ class TestFetchGuards:
 
         assert email_source.fetch({}) == []
         assert seen["password"] == "abcdefghijklmnop"
+
+
+# ---------------------------------------------------------------------------
+# Outage and recovery through the real source
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredEmailEventsRecover:
+    """The email source advances `last_uid` once a message is extracted, and
+    scoring runs afterwards. If scoring is then degraded the event is deferred
+    -- and the message is behind the checkpoint, so it is never read again. The
+    retry has to come from the store.
+    """
+
+    UID = 7
+
+    def _config(self):
+        off = {"enabled": False}
+        return {
+            **CONFIG,
+            "sources": {"devpost": off, "mlh": off, "luma": off, "watchlist": off, "email": {}},
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": 15},
+        }
+
+    def _setup(self, monkeypatch, tmp_path):
+        msg = EmailMessage()
+        msg["Subject"] = "This week in SG tech"
+        msg["From"] = "news@example.com"
+        msg["Message-ID"] = "<week-42@example.com>"
+        msg.set_content("AI Student Hackathon, Nov 3: https://x.example/hack")
+        raw = msg.as_bytes()
+        uid = str(self.UID).encode()
+        fetched, extractions = [], []
+
+        class FakeImap:
+            def __init__(self, host):
+                pass
+
+            def login(self, user, password):
+                pass
+
+            def select(self, folder, readonly=False):
+                return "OK", [b"1"]
+
+            def uid(self, command, *args):
+                if command == "search":
+                    # 'UID n:*' always returns the newest message, even when
+                    # it is at or behind n.
+                    return "OK", [uid]
+                fetched.append(args[0])
+                return "OK", [(uid + b" (RFC822)", raw)]
+
+            def logout(self):
+                pass
+
+        def extract(client, model, text, subject, sender, images=None):
+            extractions.append(subject)
+            return [
+                page_event(
+                    title="AI Student Hackathon",
+                    url="https://x.example/hack",
+                    dates_text="Nov 3",
+                )
+            ]
+
+        monkeypatch.setenv("EMAIL_ADDRESS", "feed@example.com")
+        monkeypatch.setenv("EMAIL_APP_PASSWORD", "app-password")
+        monkeypatch.setattr(email_source.imaplib, "IMAP4_SSL", FakeImap)
+        monkeypatch.setattr(email_source, "STATE_PATH", tmp_path / "state.json")
+        monkeypatch.setattr(email_source, "_extract", extract)
+        # The source's own client: extraction works throughout. Only scoring,
+        # which gets its client from `cli.make_client`, has the outage.
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", lambda: object())
+        return fetched, extractions
+
+    def test_an_event_deferred_after_extraction_is_queued_on_recovery(self, monkeypatch, tmp_path):
+        fetched, extractions = self._setup(monkeypatch, tmp_path)
+        store = Store(tmp_path / "t.db")
+
+        monkeypatch.setattr(cli, "make_client", lambda: _Explodes())
+        cli._ingest(self._config(), store)
+        assert store.queue_depth() == 0
+        assert len(store.deferred_events()) == 1
+
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        cli._ingest(self._config(), store)
+        depth, left = store.queue_depth(), store.deferred_events()
+        queued = store.pop_queued()[0]
+        store.close()
+
+        assert fetched == [str(self.UID)], "the message is behind last_uid and must not be re-read"
+        assert len(extractions) == 1
+        assert depth == 1, "the email event stayed deferred after Claude recovered"
+        assert left == []
+        assert queued.source == "email"
+        assert queued.url == "https://x.example/hack"
+        assert queued.external_id == "<week-42@example.com>#ai student hackathon"
+
+    def test_premise_the_source_does_not_return_it_a_second_time(self, monkeypatch, tmp_path):
+        """If the email source ever starts re-reading old messages, the test
+        above would pass without the store carrying anything."""
+        self._setup(monkeypatch, tmp_path)
+        assert len(email_source.fetch({})) == 1
+        assert email_source.fetch({}) == []
+
+    def test_a_reject_on_recovery_is_final(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "make_client", lambda: _Explodes())
+        cli._ingest(self._config(), store)
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(2, "networking"))
+        cli._ingest(self._config(), store)
+        depth, left = store.queue_depth(), store.deferred_events()
+        store.close()
+        assert depth == 0 and left == []

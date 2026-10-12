@@ -119,7 +119,10 @@ def fetch(source_cfg: dict) -> list[Event]:
     try:
         client = make_client()
     except Exception as exc:
-        log.info("watchlist needs Anthropic credentials (%s); skipping", exc)
+        log.warning("watchlist: Anthropic client could not be initialised (%s); skipping", exc)
+        return []
+    if client is None:
+        log.info("watchlist needs Anthropic credentials; skipping")
         return []
 
     model = source_cfg.get("model", "claude-haiku-4-5")

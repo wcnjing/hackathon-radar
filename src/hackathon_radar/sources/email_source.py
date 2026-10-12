@@ -202,7 +202,13 @@ def fetch(source_cfg: dict) -> list[Event]:
     try:
         client = make_client()
     except Exception as exc:
-        log.info("email source needs Anthropic credentials (%s); skipping", exc)
+        log.warning("email source: Anthropic client could not be initialised (%s); skipping", exc)
+        return []
+    if client is None:
+        # Before the mailbox is opened: with no client nothing can be
+        # extracted, and reading on would advance `last_uid` past messages
+        # that were never looked at.
+        log.info("email source needs Anthropic credentials; skipping")
         return []
 
     host = source_cfg.get("imap_host", "imap.gmail.com")

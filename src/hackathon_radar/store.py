@@ -26,10 +26,17 @@ META_SCHEMA = "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT
 # Events a degraded scoring run left undecided. Deliberately not `events`:
 # `is_seen` reads that table, and the whole point of deferring is that the
 # event stays unseen so the next run re-scores it.
+#
+# The whole event is kept, not just its key. A key is only enough if the source
+# hands the event over again, and two of them will not: the watchlist saves a
+# page's digest and the email source advances `last_uid` as soon as extraction
+# succeeds, before scoring. An event deferred after that would never be fetched
+# again, so the retry has to be able to run from this table alone.
 DEFERRED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS deferred (
     source      TEXT NOT NULL,
     external_id TEXT NOT NULL,
+    payload     TEXT,
     PRIMARY KEY (source, external_id)
 )
 """
@@ -49,6 +56,10 @@ class Store:
         columns = [row[1] for row in self.conn.execute("PRAGMA table_info(events)")]
         if "payload" not in columns:
             self.conn.execute("ALTER TABLE events ADD COLUMN payload TEXT")
+        # The deferred table first shipped holding keys only.
+        columns = [row[1] for row in self.conn.execute("PRAGMA table_info(deferred)")]
+        if "payload" not in columns:
+            self.conn.execute("ALTER TABLE deferred ADD COLUMN payload TEXT")
 
     # -- seen / recorded events ------------------------------------------------
 
@@ -70,11 +81,32 @@ class Store:
     # -- deferred by a degraded scoring run --------------------------------------
 
     def mark_deferred(self, event: Event) -> None:
-        """Remember that a degraded run left this event undecided."""
+        """Remember that a degraded run left this event undecided, and keep
+        everything needed to score it again without its source."""
         self.conn.execute(
-            "INSERT OR IGNORE INTO deferred (source, external_id) VALUES (?, ?)", event.key
+            "INSERT INTO deferred (source, external_id, payload) VALUES (?, ?, ?)"
+            " ON CONFLICT(source, external_id) DO UPDATE SET payload = excluded.payload",
+            (*event.key, json.dumps(asdict(event))),
         )
         self.conn.commit()
+
+    def deferred_events(self) -> list[Event]:
+        """Every deferred event that can be rebuilt, oldest first.
+
+        A row with no payload (written before payloads were kept) or one that
+        no longer fits `Event` is skipped rather than raised: it can still be
+        retried if its source returns it, and one bad row must not stop the run.
+        """
+        rows = self.conn.execute(
+            "SELECT payload FROM deferred WHERE payload IS NOT NULL ORDER BY rowid"
+        ).fetchall()
+        events = []
+        for (payload,) in rows:
+            try:
+                events.append(Event(**json.loads(payload)))
+            except TypeError, ValueError:
+                continue
+        return events
 
     def was_deferred(self, event: Event) -> bool:
         row = self.conn.execute(

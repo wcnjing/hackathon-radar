@@ -20,6 +20,8 @@ from hackathon_radar.scoring import (
     ScoreBatch,
     ScoredEvent,
     ScoreResult,
+    degraded_scores,
+    make_client,
     score_events,
 )
 from hackathon_radar.store import Store
@@ -251,9 +253,7 @@ class TestOutageRecoveryThroughIngest:
         event = make_event(title=self.BLIND_SPOT)
         store = Store(tmp_path / "t.db")
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
-        monkeypatch.setattr(
-            cli, "make_client", lambda: (_ for _ in ()).throw(RuntimeError("no key"))
-        )
+        monkeypatch.setattr(cli, "make_client", lambda: None)
         cli._ingest(self._config(), store)
         seen = store.is_seen(event)
         store.close()
@@ -358,21 +358,100 @@ class TestBatchFailureIsContained:
         assert selected == []
         assert seen == ["e0", "e1"], "Claude's rejections should be final and recorded"
 
-    def test_an_auth_failure_still_aborts_every_batch(self):
-        """A bad key is bad for all of them; there is nothing to salvage, and
-        `score_events` keeps its existing handling."""
+    def _auth_error(self):
         import anthropic
 
-        exc = anthropic.AuthenticationError(
+        return anthropic.AuthenticationError(
             "bad key",
             response=httpx.Response(401, request=httpx.Request("POST", "https://x")),
             body=None,
         )
-        events = self._events()
-        client = self.FailsOnBatch(fail_on=2, exc=exc)
+
+    def test_an_auth_failure_stops_calling_but_keeps_what_was_scored(self):
+        """A bad key is bad for every later batch, so nothing more is sent. It
+        says nothing about the batches already answered. This used to re-raise,
+        and `score_events` then keyword-scored all of them, earlier ones too."""
+        events = self._events(6)
+        client = self.FailsOnBatch(fail_on=2, exc=self._auth_error())
         scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 2, "kept calling with credentials already rejected"
+        kept = sorted(e.external_id for e in events if not scores[e.key].degraded)
+        assert kept == ["e0", "e1"]
+        assert all(scores[e.key].score == 2.0 for e in events[:2])
+        assert all(scores[e.key].degraded for e in events[2:])
+
+    def test_an_auth_failure_on_the_first_batch_degrades_everything(self):
+        events = self._events()
+        client = self.FailsOnBatch(fail_on=1, exc=self._auth_error())
+        scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 1
         assert all(scores[e.key].degraded for e in events)
-        assert client.calls == 2, "should abort, not keep trying every batch"
+
+    def test_a_cache_hit_survives_a_later_auth_failure(self, tmp_path, monkeypatch):
+        """The reviewer's first probe: batch 1 from the cache, batch 2 a 401.
+        The cached 9/10 was replaced by a degraded keyword guess."""
+        monkeypatch.delenv("RADAR_NO_SCORE_CACHE", raising=False)
+        monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", tmp_path / "c.json")
+        first = self._events(2)
+        score_events(first, self.CONFIG, _ScoresEverything(9, "hackathon"))  # warm batch 1
+
+        events = self._events(4)
+        client = self.FailsOnBatch(fail_on=1, exc=self._auth_error())
+        scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 1
+        assert [scores[e.key].score for e in events[:2]] == [9.0, 9.0]
+        assert not any(scores[e.key].degraded for e in events[:2])
+        assert all(scores[e.key].degraded for e in events[2:])
+
+    def test_the_cache_still_answers_batches_after_an_auth_failure(self, tmp_path, monkeypatch):
+        """Stopping API calls must not stop cache hits: batch 2 fails auth,
+        batch 3 is already cached and needs no credentials."""
+        monkeypatch.delenv("RADAR_NO_SCORE_CACHE", raising=False)
+        monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", tmp_path / "c.json")
+        events = self._events(6)
+        score_events(events[4:], self.CONFIG, _ScoresEverything(9, "hackathon"))  # warm batch 3
+
+        client = self.FailsOnBatch(fail_on=2, exc=self._auth_error())
+        scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 2
+        degraded = sorted(e.external_id for e in events if scores[e.key].degraded)
+        assert degraded == ["e2", "e3"]
+        assert [scores[e.key].score for e in events[4:]] == [9.0, 9.0]
+
+    def test_a_later_batch_with_no_parsed_output_keeps_earlier_scores(self):
+        """The reviewer's second probe. The SDK types `parsed_output` as
+        optional, and reading `.scores` off None happened outside the per-batch
+        handler, so it took the whole run down with it."""
+
+        class NoParsedOutputOnSecond(self.FailsOnBatch):
+            def parse(inner, **kw):
+                if inner.calls == 1:  # this is the second call
+                    inner.calls += 1
+                    return type("R", (), {"parsed_output": None})()
+                return super().parse(**kw)
+
+        events = self._events(6)
+        client = NoParsedOutputOnSecond(fail_on=99)
+        scores = score_events(events, self.CONFIG, client)
+        assert client.calls == 3, "a batch after the bad one was not attempted"
+        degraded = sorted(e.external_id for e in events if scores[e.key].degraded)
+        assert degraded == ["e2", "e3"]
+        assert all(scores[e.key].score == 2.0 for e in events[:2] + events[4:])
+
+    def test_a_late_auth_failure_does_not_queue_or_bury_earlier_rejects(self, tmp_path):
+        """End to end: Claude's 2/10 for batch 1 must stay a recorded reject,
+        not turn into a deferred (or posted) keyword guess."""
+        events = self._events()
+        client = self.FailsOnBatch(fail_on=2, exc=self._auth_error())
+        scores = score_events(events, self.CONFIG, client)
+        store = Store(tmp_path / "t.db")
+        selected = _select(events, scores, store, self.CONFIG, 99, dry_run=False)
+        seen = sorted(e.external_id for e in events if store.is_seen(e))
+        deferred = sorted(e.external_id for e in events if store.was_deferred(e))
+        store.close()
+        assert selected == []
+        assert seen == ["e0", "e1"]
+        assert deferred == ["e2", "e3"]
 
     def test_the_failure_names_the_batch_in_the_log(self, caplog):
         with caplog.at_level("ERROR"):
@@ -573,3 +652,430 @@ class TestOutageBacklogIsSpreadAcrossRuns:
         marked = store.was_deferred(event)
         store.close()
         assert marked is False
+
+
+# ---------------------------------------------------------------------------
+# "No credentials" and "could not build the client" are different outcomes
+# ---------------------------------------------------------------------------
+
+
+ANTHROPIC_ENV = (
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_PROFILE",
+    "ANTHROPIC_CONFIG_DIR",
+    "ANTHROPIC_IDENTITY_TOKEN",
+    "ANTHROPIC_IDENTITY_TOKEN_FILE",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "ALL_PROXY",
+)
+
+
+class TestMakeClient:
+    """`make_client` returns None when nothing is configured and raises when
+    something is configured and unusable. Every exception used to become
+    `client=None`, i.e. final keyword-only scoring."""
+
+    @pytest.fixture(autouse=True)
+    def clean_env(self, monkeypatch):
+        for name in ANTHROPIC_ENV:
+            monkeypatch.delenv(name, raising=False)
+            monkeypatch.delenv(name.lower(), raising=False)
+
+    def _fake_sdk(self, monkeypatch, **attrs):
+        """Stand in for the SDK's own credential lookup, which reads the
+        developer's home directory and so cannot be exercised hermetically."""
+        import anthropic
+
+        built = type("FakeAnthropic", (), {"api_key": None, "auth_token": None, **attrs})
+        monkeypatch.setattr(anthropic, "Anthropic", lambda **kw: built())
+        return built
+
+    def test_no_credentials_at_all_is_none(self, monkeypatch):
+        self._fake_sdk(monkeypatch, credentials=None)
+        assert make_client() is None
+
+    def test_an_empty_key_is_no_credentials(self, monkeypatch):
+        """An unset Actions secret arrives as an empty string, which the SDK
+        stores as-is."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+        self._fake_sdk(monkeypatch, api_key="", credentials=None)
+        assert make_client() is None
+
+    def test_an_auth_token_is_a_client(self, monkeypatch):
+        built = self._fake_sdk(monkeypatch, auth_token="token", credentials=None)
+        assert isinstance(make_client(), built)
+
+    def test_a_credentials_provider_is_a_client(self, monkeypatch):
+        """An `ant auth login` profile or workload identity: no static key."""
+        built = self._fake_sdk(monkeypatch, credentials=object())
+        assert isinstance(make_client(), built)
+
+    def test_an_sdk_without_a_credentials_attribute_still_works(self, monkeypatch):
+        self._fake_sdk(monkeypatch)
+        assert make_client() is None
+
+    def test_an_api_key_is_a_real_client(self, monkeypatch):
+        import anthropic
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        client = make_client()
+        assert isinstance(client, anthropic.Anthropic)
+        assert client.auth_token is None
+
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+    def test_a_key_with_a_broken_proxy_raises(self, monkeypatch):
+        """The reviewer's example, against the real SDK: credentials are
+        present and construction fails. That must not read as "no key"."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("HTTPS_PROXY", "not a proxy://::")
+        with pytest.raises(Exception, match="proxy"):
+            make_client()
+
+    @pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")
+    def test_a_key_with_a_broken_base_url_raises(self, monkeypatch):
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("ANTHROPIC_BASE_URL", "::::")
+        with pytest.raises(Exception):  # noqa: B017 - whatever httpx raises for it
+            make_client()
+
+
+class TestClientConstructionFailureIsDegraded:
+    """Through `_ingest`: a configured deployment whose client cannot be built
+    is having an outage. Its keyword guesses must neither post nor be recorded.
+    """
+
+    def _config(self):
+        with open(PROJECT_ROOT / "config.toml", "rb") as f:
+            interests = tomllib.load(f)["interests"]
+        return {
+            "interests": interests,
+            "scoring": {},
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": 15},
+        }
+
+    def _broken(self):
+        raise ValueError("Unknown scheme for proxy URL")
+
+    def _events(self):
+        # One the keyword scorer would post and one it would bury.
+        return [
+            make_event(title="AI Agents Hackathon 2026", external_id="post"),
+            make_event(title="Quantum Computing Primer", external_id="bury"),
+        ]
+
+    def test_premise_keyword_only_would_post_one_and_record_both(self, tmp_path, monkeypatch):
+        events = self._events()
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        cli._ingest(self._config(), store)
+        depth, seen = store.queue_depth(), [store.is_seen(e) for e in events]
+        store.close()
+        assert depth == 1 and seen == [True, True]
+
+    def test_a_construction_failure_posts_and_records_nothing(self, tmp_path, monkeypatch, caplog):
+        events = self._events()
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", self._broken)
+        with caplog.at_level("WARNING"):
+            cli._ingest(self._config(), store)
+        depth = store.queue_depth()
+        seen = [store.is_seen(e) for e in events]
+        deferred = [store.was_deferred(e) for e in events]
+        store.close()
+        assert depth == 0, "a fallback guess posted while the client was broken"
+        assert seen == [False, False], "a fallback guess was recorded permanently"
+        assert deferred == [True, True]
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("could not be initialised" in m and "DEGRADED" in m for m in messages)
+        assert not any("No Anthropic credentials configured" in m for m in messages)
+
+    def test_the_events_are_scored_properly_once_the_client_builds(self, tmp_path, monkeypatch):
+        events = self._events()
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", self._broken)
+        cli._ingest(self._config(), store)
+
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        cli._ingest(self._config(), store)
+        depth = store.queue_depth()
+        store.close()
+        assert depth == 2, "Claude rated both 9 once it was reachable"
+
+    def test_missing_credentials_are_still_final_and_say_so(self, tmp_path, monkeypatch, caplog):
+        events = self._events()
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        with caplog.at_level("WARNING"):
+            cli._ingest(self._config(), store)
+        deferred = [store.was_deferred(e) for e in events]
+        store.close()
+        messages = [r.getMessage() for r in caplog.records]
+        assert deferred == [False, False]
+        assert any("No Anthropic credentials configured" in m for m in messages)
+        assert not any("DEGRADED" in m for m in messages)
+
+    def test_a_dry_run_shows_nothing_from_a_broken_client(self, tmp_path, monkeypatch):
+        events = self._events()
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: events)
+        monkeypatch.setattr(cli, "make_client", self._broken)
+        new, scores, client = cli._collect(self._config(), store)
+        selected = _select(new, scores, store, self._config(), 99, dry_run=True)
+        store.close()
+        assert client is None
+        assert all(scores[e.key].degraded for e in events)
+        assert selected == []
+
+    def test_degraded_scores_flags_every_event(self):
+        events = self._events()
+        scores = degraded_scores(events, self._config())
+        assert set(scores) == {e.key for e in events}
+        assert all(r.degraded for r in scores.values())
+
+
+class TestSourcesNeedAClient:
+    """The two sources that extract with Claude skip on both outcomes."""
+
+    def test_the_watchlist_skips_without_credentials(self, monkeypatch):
+        from hackathon_radar.sources import watchlist
+
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", lambda: None)
+        assert watchlist.fetch({"pages": ["https://x.org/"]}) == []
+
+    def test_the_watchlist_skips_when_the_client_cannot_be_built(self, monkeypatch):
+        from hackathon_radar.sources import watchlist
+
+        def broken():
+            raise ValueError("bad proxy")
+
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", broken)
+        assert watchlist.fetch({"pages": ["https://x.org/"]}) == []
+
+    def test_the_email_source_skips_without_credentials(self, monkeypatch):
+        from hackathon_radar.sources import email_source
+
+        monkeypatch.setenv("EMAIL_ADDRESS", "feed@example.com")
+        monkeypatch.setenv("EMAIL_APP_PASSWORD", "app-password")
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", lambda: None)
+        monkeypatch.setattr(
+            email_source.imaplib,
+            "IMAP4_SSL",
+            lambda host: (_ for _ in ()).throw(AssertionError("opened a mailbox")),
+        )
+        assert email_source.fetch({}) == []
+
+
+# ---------------------------------------------------------------------------
+# A deferred event must come back even if its source never returns it again
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredEventsRecoverWithoutTheirSource:
+    """The deferred table used to hold keys only, so a retry still depended on
+    the source handing the event over again. Sources that checkpoint before
+    scoring (watchlist, email) never do, and their events stayed deferred
+    forever. The whole payload is stored now and `_collect` carries it in.
+
+    Here the source is simulated by a `fetch_all` that returns the event once;
+    tests/test_watchlist.py and tests/test_email_source.py run the real ones.
+    """
+
+    CAP = 2
+
+    def _config(self):
+        return {
+            **CONFIG,
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": self.CAP},
+        }
+
+    def _ingest(self, monkeypatch, store, fetched, client):
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: list(fetched))
+        monkeypatch.setattr(cli, "make_client", lambda: client)
+        cli._ingest(self._config(), store)
+
+    def _rich_event(self):
+        return make_event(
+            title="AI Student Hackathon",
+            source="watchlist",
+            external_id="https://x.org/#ai student hackathon",
+            dates_text="Nov 3-4",
+            location="COM3, NUS",
+            country="SG",
+            online=True,
+            tags=["ai", "student"],
+            prize="$5,000",
+            register_url="https://x.org/register",
+        )
+
+    def test_the_whole_event_round_trips_through_the_store(self, tmp_path):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        store.mark_deferred(event)
+        store.close()
+        reopened = Store(tmp_path / "t.db")  # a later run is a later process
+        restored = reopened.deferred_events()
+        reopened.close()
+        assert restored == [event]
+
+    def test_a_source_that_never_returns_it_again_still_recovers(self, tmp_path, monkeypatch):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, [event], _Explodes())
+        assert store.was_deferred(event) and store.queue_depth() == 0
+
+        self._ingest(monkeypatch, store, [], _ScoresEverything(9, "hackathon"))
+        depth, still_deferred = store.queue_depth(), store.was_deferred(event)
+        queued = store.pop_queued()[0]
+        store.close()
+        assert depth == 1, "the event stayed deferred forever"
+        assert still_deferred is False
+        assert (queued.title, queued.url, queued.dates_text) == (
+            event.title,
+            event.url,
+            event.dates_text,
+        )
+
+    def test_a_reject_on_recovery_is_recorded_and_released(self, tmp_path, monkeypatch):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, [event], _Explodes())
+        self._ingest(monkeypatch, store, [], _ScoresEverything(2, "networking"))
+        seen, left = store.is_seen(event), store.deferred_events()
+        self._ingest(monkeypatch, store, [], _ScoresEverything(9, "hackathon"))
+        depth = store.queue_depth()
+        store.close()
+        assert seen is True and left == []
+        assert depth == 0, "a recorded reject was carried in and scored again"
+
+    def test_it_keeps_being_carried_through_a_long_outage(self, tmp_path, monkeypatch):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, [event], _Explodes())
+        for _ in range(3):
+            self._ingest(monkeypatch, store, [], _Explodes())
+        assert store.deferred_events() == [event]
+        self._ingest(monkeypatch, store, [], _ScoresEverything(9, "hackathon"))
+        depth = store.queue_depth()
+        store.close()
+        assert depth == 1
+
+    def test_an_event_its_source_does_return_is_scored_once(self, tmp_path, monkeypatch):
+        """Carried and fetched copies of one event must not both be scored."""
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, [event], _Explodes())
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [self._rich_event()])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        new, scores, _ = cli._collect(self._config(), store)
+        store.close()
+        assert len(new) == 1 and len(scores) == 1
+
+    def test_the_fetched_copy_wins_over_the_stored_one(self, tmp_path, monkeypatch):
+        """The page was edited during the outage; the stored payload is stale."""
+        stale = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, [stale], _Explodes())
+        fresh = self._rich_event()
+        fresh.dates_text = "Nov 10-11 (postponed)"
+        self._ingest(monkeypatch, store, [fresh], _ScoresEverything(9, "hackathon"))
+        queued = store.pop_queued()[0]
+        store.close()
+        assert queued.dates_text == "Nov 10-11 (postponed)"
+
+    def test_a_later_deferral_refreshes_the_stored_payload(self, tmp_path):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        store.mark_deferred(event)
+        event.dates_text = "Nov 10-11 (postponed)"
+        store.mark_deferred(event)
+        restored = store.deferred_events()
+        store.close()
+        assert [e.dates_text for e in restored] == ["Nov 10-11 (postponed)"]
+
+    def test_a_backlog_held_at_the_cap_drains_without_its_source(self, tmp_path, monkeypatch):
+        """Held events were retried only if re-fetched, which is the same bug
+        one step later: recovery queued `cap` and stranded the rest."""
+        events = [
+            make_event(title=f"AI Hackathon {i}", source="email", external_id=f"<m{i}@x>#h")
+            for i in range(5)
+        ]
+        store = Store(tmp_path / "t.db")
+        self._ingest(monkeypatch, store, events, _Explodes())
+        healthy = _ScoresEverything(9, "hackathon")
+        depths = []
+        for _ in range(3):
+            self._ingest(monkeypatch, store, [], healthy)
+            depths.append(store.queue_depth())
+        left = store.deferred_events()
+        store.close()
+        assert depths == [2, 4, 5]
+        assert left == []
+
+    def test_scope_still_applies_to_a_carried_event(self, tmp_path, monkeypatch):
+        event = make_event(title="AI Hackathon", country="US", location="New York")
+        store = Store(tmp_path / "t.db")
+        store.mark_deferred(event)
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [])
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        cli._ingest({**self._config(), "scope": {"mode": "sg_only"}}, store)
+        depth = store.queue_depth()
+        store.close()
+        assert depth == 0
+
+    def test_a_dry_run_previews_carried_events_and_changes_nothing(self, tmp_path, monkeypatch):
+        event = self._rich_event()
+        store = Store(tmp_path / "t.db")
+        store.mark_deferred(event)
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [])
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        new, scores, _ = cli._collect(self._config(), store)
+        selected = _select(new, scores, store, self._config(), 99, dry_run=True)
+        still, seen = store.was_deferred(event), store.is_seen(event)
+        store.close()
+        assert selected == [event]
+        assert still is True and seen is False
+
+    def test_a_key_only_row_from_the_first_schema_is_migrated(self, tmp_path):
+        """The table shipped once without a payload column. Such a row cannot
+        be carried, but it must not break the store or lose its marker."""
+        import sqlite3
+
+        path = tmp_path / "t.db"
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE deferred (source TEXT NOT NULL, external_id TEXT NOT NULL,"
+            " PRIMARY KEY (source, external_id))"
+        )
+        conn.execute("INSERT INTO deferred VALUES ('test', '1')")
+        conn.commit()
+        conn.close()
+
+        event = make_event(title="AI Hackathon")
+        store = Store(path)
+        marked, carried = store.was_deferred(event), store.deferred_events()
+        store.mark_deferred(event)  # deferred again: the payload is filled in
+        refilled = store.deferred_events()
+        store.close()
+        assert marked is True and carried == []
+        assert refilled == [event]
+
+    @pytest.mark.parametrize("payload", ["{not json", "[]", '{"title": "no key fields"}', "null"])
+    def test_an_unreadable_payload_is_skipped_not_raised(self, tmp_path, payload):
+        good = make_event(title="AI Hackathon", external_id="good")
+        store = Store(tmp_path / "t.db")
+        store.conn.execute("INSERT INTO deferred VALUES ('test', 'bad', ?)", (payload,))
+        store.mark_deferred(good)
+        carried = store.deferred_events()
+        store.close()
+        assert carried == [good]

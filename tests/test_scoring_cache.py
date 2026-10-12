@@ -454,3 +454,191 @@ class TestCacheLocation:
             score_events([make_event(title="AI Hackathon")], CONFIG, client)
         assert client.calls == 1
         assert elsewhere.exists()
+
+
+# ---------------------------------------------------------------------------
+# A batch is only an answer if it has exactly one row per requested event
+# ---------------------------------------------------------------------------
+
+
+class TestBatchesAreValidatedByExpectedIds:
+    """`_cache_read` accepted any schema-valid list, and the store path called a
+    response complete when `len(scored) == len(batch)`. So a response that
+    repeated one id was cached and reused, and a cached `[]` was a hit forever.
+    """
+
+    def _events(self, n=3):
+        return [make_event(title=f"AI Hackathon {i}", external_id=str(i)) for i in range(n)]
+
+    @pytest.fixture
+    def cache_file(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("RADAR_NO_SCORE_CACHE", raising=False)
+        path = tmp_path / "c.json"
+        monkeypatch.setattr("hackathon_radar.scoring.CACHE_PATH", path)
+        return path
+
+    class Rewrites:
+        """A client whose answer is built from the requested ids by `shape`."""
+
+        def __init__(self, shape):
+            self.shape, self.calls = shape, 0
+            self.messages = self
+
+        def parse(self, **kw):
+            self.calls += 1
+            ids = [e["id"] for e in json.loads(kw["messages"][0]["content"].split("\n", 1)[1])]
+            rows = [
+                ScoredEvent(id=i, score=score, reason="r", kind="hackathon", level="unclear")
+                for i, score in self.shape(ids)
+            ]
+            return type("R", (), {"parsed_output": ScoreBatch(scores=rows)})()
+
+    @staticmethod
+    def _duplicated(ids):
+        """Right length, wrong content: the first id answered for every row."""
+        return [(ids[0], 9 - n) for n in range(len(ids))]
+
+    @staticmethod
+    def _foreign(ids):
+        return [(ids[0], 9), (ids[1], 9), ("test:not-in-the-batch", 9)]
+
+    @staticmethod
+    def _complete(ids):
+        return [(i, 9) for i in ids]
+
+    def _poison(self, cache_file, rows):
+        """Replace every stored batch with `rows`, as a bad write would have."""
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        assert len(cache) == 1
+        cache_file.write_text(json.dumps({key: rows for key in cache}), encoding="utf-8")
+
+    # -- live answers ------------------------------------------------------
+
+    def test_a_duplicate_id_answer_is_not_cached(self, cache_file, caplog):
+        """The reviewer's reproduction: three rows for a batch of three, all the
+        same id. It passed the length check and was stored."""
+        client = self.Rewrites(self._duplicated)
+        with caplog.at_level("WARNING"):
+            score_events(self._events(), CONFIG, client)
+        assert not cache_file.exists() or json.loads(cache_file.read_text()) == {}
+        assert any("not caching this batch" in r.message for r in caplog.records)
+
+    def test_a_duplicate_id_answer_is_asked_again_next_run(self, cache_file):
+        client = self.Rewrites(self._duplicated)
+        score_events(self._events(), CONFIG, client)
+        score_events(self._events(), CONFIG, client)
+        assert client.calls == 2, "the bad answer was served from the cache"
+
+    def test_a_repeated_id_is_not_trusted_for_any_event(self, cache_file):
+        """Three different scores for one id: there is no telling which is
+        meant, so none is used and every event is left for a later run."""
+        events = self._events()
+        results = score_events(events, CONFIG, self.Rewrites(self._duplicated))
+        assert len(results) == 3
+        assert all(r.degraded for r in results.values())
+
+    def test_a_foreign_id_answer_is_not_cached_and_its_good_rows_are_used(self, cache_file):
+        events = self._events()
+        client = self.Rewrites(self._foreign)
+        results = score_events(events, CONFIG, client)
+        degraded = sorted(e.external_id for e in events if results[e.key].degraded)
+        assert degraded == ["2"], "only the event the model did not answer falls back"
+        assert [results[e.key].score for e in events[:2]] == [9.0, 9.0]
+        assert not cache_file.exists() or json.loads(cache_file.read_text()) == {}
+        score_events(self._events(), CONFIG, client)
+        assert client.calls == 2
+
+    def test_one_repeated_id_does_not_discard_the_rows_beside_it(self, cache_file):
+        events = self._events()
+        shape = lambda ids: [(ids[0], 9), (ids[1], 3), (ids[1], 8)]  # noqa: E731
+        results = score_events(events, CONFIG, self.Rewrites(shape))
+        assert results[events[0].key] == (9.0, "r", False, False)
+        assert results[events[1].key].degraded is True
+        assert results[events[2].key].degraded is True
+
+    # -- cached answers ----------------------------------------------------
+
+    def _row(self, event, score=9):
+        return dict(
+            id=f"{event.source}:{event.external_id}",
+            score=score,
+            reason="cached",
+            kind="hackathon",
+            level="unclear",
+        )
+
+    @pytest.mark.parametrize("shape", ["empty", "short", "duplicate", "foreign"])
+    def test_a_cached_batch_that_does_not_answer_its_events_is_a_miss(self, cache_file, shape):
+        """The reviewer's other reproduction: a cached `[]` was accepted as a
+        hit and never healed. Every wrong shape must be re-asked."""
+        events = self._events()
+        good = _ScoresEverything(score=9, kind="hackathon")
+        score_events(events, CONFIG, good)
+        rows = {
+            "empty": [],
+            "short": [self._row(events[0])],
+            "duplicate": [self._row(events[0])] * 3,
+            "foreign": [self._row(events[0]), self._row(events[1]), self._row(make_event("x"))]
+            and [
+                self._row(events[0]),
+                self._row(events[1]),
+                dict(self._row(events[2]), id="test:somebody-else"),
+            ],
+        }[shape]
+        self._poison(cache_file, rows)
+
+        fresh = self._events()
+        results = score_events(fresh, CONFIG, good)
+        assert good.calls == 2, "the bad cache entry was served as a hit"
+        assert all(r.score == 9.0 and not r.degraded for r in results.values())
+        assert all(r.reason == "r" for r in results.values()), "a cached row was used"
+
+    def test_a_bad_cached_batch_is_healed_by_the_next_good_answer(self, cache_file):
+        events = self._events()
+        good = _ScoresEverything(score=9, kind="hackathon")
+        score_events(events, CONFIG, good)
+        self._poison(cache_file, [])
+
+        score_events(self._events(), CONFIG, good)  # miss: re-asked and re-stored
+        score_events(self._events(), CONFIG, good)  # hit
+        stored = json.loads(cache_file.read_text(encoding="utf-8"))
+        assert good.calls == 2
+        assert [len(rows) for rows in stored.values()] == [3]
+
+    def test_a_bad_cached_batch_is_removed_even_if_the_model_stays_bad(self, cache_file):
+        """Otherwise it would be re-read and re-discarded on every run."""
+        events = self._events()
+        score_events(events, CONFIG, _ScoresEverything(score=9, kind="hackathon"))
+        self._poison(cache_file, [])
+        score_events(self._events(), CONFIG, self.Rewrites(self._duplicated))
+        assert json.loads(cache_file.read_text(encoding="utf-8")) == {}
+
+    def test_a_complete_answer_is_still_cached_and_served(self, cache_file):
+        """Guard the other direction: validation must not turn hits into misses."""
+        client = self.Rewrites(self._complete)
+        first = score_events(self._events(), CONFIG, client)
+        second = score_events(self._events(), CONFIG, client)
+        assert client.calls == 1
+        assert first == second
+
+    def test_order_within_a_batch_does_not_matter(self, cache_file):
+        client = self.Rewrites(lambda ids: [(i, 9) for i in reversed(ids)])
+        score_events(self._events(), CONFIG, client)
+        results = score_events(self._events(), CONFIG, client)
+        assert client.calls == 1
+        assert not any(r.degraded for r in results.values())
+
+    def test_the_same_key_twice_is_scored_once_and_applied_to_both(self, cache_file):
+        """Two sources can hand over one key. Sent twice, the batch could never
+        be answered with one row per id."""
+        a = make_event(title="AI Hackathon", external_id="same")
+        b = make_event(title="AI Hackathon", external_id="same")
+        other = make_event(title="ML Hackathon", external_id="other")
+        client = _ScoresEverything(score=9, kind="program")
+        results = score_events([a, b, other], CONFIG, client)
+        sent = json.loads(
+            next(iter(json.loads(cache_file.read_text()).values()))[0]["id"].join('""')
+        )
+        assert sent == "test:other"
+        assert len(results) == 2 and not any(r.degraded for r in results.values())
+        assert (a.kind, b.kind, other.kind) == ("program", "program", "program")

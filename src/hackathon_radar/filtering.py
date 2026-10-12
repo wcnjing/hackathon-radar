@@ -16,11 +16,20 @@ Kind = Literal["hackathon", "networking", "program"]
 # from.
 HACKATHON_ONLY_SOURCES = ("devpost", "mlh")
 
+# Words that name a networking *format*: what the evening is, not what it is
+# about. They outrank program words for that reason — "Accelerator Demo Day" and
+# "Startup Accelerator Networking Meetup" are a demo day and a meetup whose
+# topic happens to be an accelerator, and ranking the topic first let both post
+# at the base bar on keyword hits alone.
 NETWORKING_TITLE_RE = re.compile(
-    r"\b(meetup|mixer|social|demo day|founders?['’]? (breakfast|coffee)|"
+    r"\b(meetup|mixer|demo day|founders?['’]? (breakfast|coffee)|"
     r"talk|panel|fireside|networking|conference|summit|expo)\b",
     re.I,
 )
+# "social" is kept apart because it is as often an adjective as a format:
+# "Social Impact Accelerator" is a program. It still reads as networking, but
+# only once no program word has claimed the title.
+SOCIAL_TITLE_RE = re.compile(r"\bsocial\b", re.I)
 PROGRAM_TITLE_RE = re.compile(
     r"\b(accelerator|fellowship|cohort|bootcamp|incubat\w*|apprenticeship|residency)\b", re.I
 )
@@ -31,11 +40,17 @@ PROGRAM_TITLE_RE = re.compile(
 # datathon, so these beat any networking word: "Hackathon Demo Day" is a
 # hackathon that happens to end in a demo, not a demo day.
 #
-# `hacka` catches hackathon/hackathons; `hacks\b` catches MHacks and TartanHacks
-# where the prefix is glued on; `\bhack\b` catches "Hack&Roll". Deliberately not
-# a bare `hack`, which would also match "shack" and "hackney".
+# `hacka` catches hackathon/hackathons and `\bhack\b` catches "Hack&Roll".
+# Deliberately not a bare `hack`, which would also match "shack" and "hackney".
+#
+# "Hacks" is strong only as the tail of a CamelCase name — MHacks, TartanHacks —
+# which is how hackathons brand themselves and nothing else does. That half is
+# case-sensitive, so the pattern must be run over the original text, not a
+# lowercased copy. A free-standing "hacks" ("AI Life Hacks Meetup") and a
+# lowercase compound ("Lifehacks") are ordinary English and are not strong; the
+# free-standing form is a WEAK word below.
 STRONG_HACKATHON_RE = re.compile(
-    r"hacka|hacks\b|\bhack\b|\bbuildathon\b|\bbuild-a-thon\b|\bdatathon\b", re.I
+    r"(?i:hacka|\bhack\b|\bbuildathon\b|\bbuild-a-thon\b|\bdatathon\b)|(?<=[A-Za-z])Hacks\b"
 )
 
 # WEAK words merely suggest building. Every one of them appears happily in the
@@ -48,8 +63,13 @@ STRONG_HACKATHON_RE = re.compile(
 # Each is `\b`-anchored on both sides. An unanchored `sprint` once classified
 # "Sprinter Van Expo" as a hackathon; `\bbuild\b`'s closing boundary is what
 # keeps "AI Builders Mixer" out while letting "Build with AI" through.
+#
+# A free-standing "hacks" belongs here: NUS Hackers' "Friday Hacks" is a real
+# build night, but "Life Hacks" and "Growth Hacks" are not, and the word cannot
+# tell them apart. It classifies when nothing contradicts it and loses to an
+# explicit networking format.
 WEAK_BUILD_RE = re.compile(
-    r"\bsprint\b|\bjam\b|\bworkshop\b|\bleague\b|\bbuild\b|"
+    r"\bsprint\b|\bjam\b|\bworkshop\b|\bleague\b|\bbuild\b|\bhacks\b|"
     r"\b(challenge|competition|contest)\b",
     re.I,
 )
@@ -74,19 +94,25 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
     Precedence, strongest claim first:
 
         1. source        devpost/mlh publish nothing else
-        2. strong build  "hackathon", "datathon" — names the format outright
-        3. program       "accelerator", "fellowship"
-        4. networking    "mixer", "meetup", "networking"
-        5. weak build    "build", "jam", "league", "challenge"
-        6. default       networking, with no signal reported
+        2. strong build  "hackathon", "datathon", "MHacks" — names the format
+        3. networking    "mixer", "meetup", "demo day" — names the format
+        4. program       "accelerator", "fellowship"
+        5. social        "social", once no program word has claimed the title
+        6. weak build    "build", "jam", "hacks", "challenge"
+        7. default       networking, with no signal reported
 
-    The split at 2/5 is the whole point. Ranking *every* build word above
+    The split at 2/6 is the whole point. Ranking *every* build word above
     networking fixes "Social Impact Hackathon" and "Hackathon Demo Day", which
     were filed as networking on the strength of "social" and "demo day" — but it
     also hands the base bar of 6 to "Build Club Mixer", "Pitch Competition &
     Networking Night" and "Founders Breakfast: Build in Public", all of which
     then post. Strong words earn that precedence; weak ones do not, because a
     mixer will happily call itself a jam.
+
+    3 sits above 4 for the same reason, one level down: a networking word says
+    what the event *is*, a program word often only what it is about. With the
+    order reversed, "Startup Accelerator Networking Meetup" was a program and
+    cleared the base bar that the networking bar exists to raise.
 
     Searches tags as well as the title: MLH stamps every event
     `tags=["student hackathon"]` and Devpost carries its themes, so the tags are
@@ -95,12 +121,16 @@ def classify_kind_with_signal(event: Event) -> tuple[Kind, bool]:
     """
     if event.source in HACKATHON_ONLY_SOURCES:
         return "hackathon", True
-    haystack = " ".join([event.title, *event.tags]).lower()
+    # Not lowercased: STRONG_HACKATHON_RE reads the capital in "MHacks". Every
+    # other pattern ignores case on its own.
+    haystack = " ".join([event.title, *event.tags])
     if STRONG_HACKATHON_RE.search(haystack):
         return "hackathon", True
+    if NETWORKING_TITLE_RE.search(haystack):
+        return "networking", True
     if PROGRAM_TITLE_RE.search(haystack):
         return "program", True
-    if NETWORKING_TITLE_RE.search(haystack):
+    if SOCIAL_TITLE_RE.search(haystack):
         return "networking", True
     if WEAK_BUILD_RE.search(haystack):
         return "hackathon", True

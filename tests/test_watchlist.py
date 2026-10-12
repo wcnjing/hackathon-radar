@@ -1,5 +1,9 @@
+from scoring_fakes import CONFIG, _Explodes, _ScoresEverything
+
+from hackathon_radar import cli
 from hackathon_radar.sources import watchlist
 from hackathon_radar.sources.watchlist import PageEvent, to_event
+from hackathon_radar.store import Store
 
 
 def page_event(**overrides) -> PageEvent:
@@ -96,3 +100,117 @@ class TestHashGate:
         assert watchlist.fetch(cfg) == []
         assert watchlist.fetch(cfg) == []
         assert len(calls) == 2  # hash not saved on failure, so it retried
+
+
+# ---------------------------------------------------------------------------
+# Outage and recovery through the real source
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredWatchlistEventsRecover:
+    """The watchlist saves a page's digest as soon as extraction succeeds, and
+    scoring runs afterwards. If scoring is then degraded the event is deferred
+    -- and the page, unchanged, is skipped on every later run. The retry has to
+    come from the store, because this source will not return the event again.
+    """
+
+    PAGE = "https://www.nushackers.org/"
+
+    def _config(self):
+        off = {"enabled": False}
+        return {
+            **CONFIG,
+            "sources": {
+                "devpost": off,
+                "mlh": off,
+                "luma": off,
+                "email": off,
+                "watchlist": {"pages": [self.PAGE]},
+            },
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": 15},
+        }
+
+    def _setup(self, monkeypatch, tmp_path):
+        extractions = []
+
+        class FakeWeb:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def get(self, url):
+                return type("R", (), {"text": "<p>AI Student Hackathon, Nov 3</p>"})()
+
+        def extract(client, model, text, page_url):
+            extractions.append(page_url)
+            return [page_event(title="AI Student Hackathon", url="/h", dates_text="Nov 3")]
+
+        monkeypatch.setattr(watchlist.httpx, "Client", lambda **kw: FakeWeb())
+        monkeypatch.setattr(watchlist, "STATE_PATH", tmp_path / "state.json")
+        monkeypatch.setattr(watchlist, "_extract", extract)
+        # The source's own client: extraction works throughout. Only scoring,
+        # which gets its client from `cli.make_client`, has the outage.
+        monkeypatch.setattr("hackathon_radar.scoring.make_client", lambda: object())
+        return extractions
+
+    def test_an_event_deferred_after_extraction_is_queued_on_recovery(self, monkeypatch, tmp_path):
+        extractions = self._setup(monkeypatch, tmp_path)
+        store = Store(tmp_path / "t.db")
+
+        monkeypatch.setattr(cli, "make_client", lambda: _Explodes())
+        cli._ingest(self._config(), store)
+        assert store.queue_depth() == 0
+        assert len(store.deferred_events()) == 1
+
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        cli._ingest(self._config(), store)
+        depth, left = store.queue_depth(), store.deferred_events()
+        queued = store.pop_queued()[0]
+        store.close()
+
+        assert extractions == [self.PAGE], "the page was unchanged and must not be re-extracted"
+        assert depth == 1, "the watchlist event stayed deferred after Claude recovered"
+        assert left == []
+        assert queued.source == "watchlist"
+        assert queued.url == "https://www.nushackers.org/h"
+        assert queued.dates_text == "Nov 3"
+
+    def test_premise_the_source_does_not_return_it_a_second_time(self, monkeypatch, tmp_path):
+        """If the watchlist ever starts re-emitting unchanged pages, the test
+        above would pass without the store carrying anything."""
+        self._setup(monkeypatch, tmp_path)
+        cfg = self._config()["sources"]["watchlist"]
+        assert len(watchlist.fetch(cfg)) == 1
+        assert watchlist.fetch(cfg) == []
+
+    def test_a_reject_on_recovery_is_final(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "make_client", lambda: _Explodes())
+        cli._ingest(self._config(), store)
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(2, "networking"))
+        cli._ingest(self._config(), store)
+        depth, left = store.queue_depth(), store.deferred_events()
+        store.close()
+        assert depth == 0 and left == []
+
+    def test_a_scoring_client_that_cannot_be_built_also_recovers(self, monkeypatch, tmp_path):
+        self._setup(monkeypatch, tmp_path)
+        store = Store(tmp_path / "t.db")
+
+        def broken():
+            raise ValueError("Unknown scheme for proxy URL")
+
+        monkeypatch.setattr(cli, "make_client", broken)
+        cli._ingest(self._config(), store)
+        assert store.queue_depth() == 0 and len(store.deferred_events()) == 1
+
+        monkeypatch.setattr(cli, "make_client", lambda: _ScoresEverything(9, "hackathon"))
+        cli._ingest(self._config(), store)
+        depth = store.queue_depth()
+        store.close()
+        assert depth == 1

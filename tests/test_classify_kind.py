@@ -279,15 +279,32 @@ class TestStrongAndWeakBuildSignals:
     def test_weak_build_words_still_classify_when_nothing_contradicts_them(self, title):
         assert classify_kind(make_event(title=title)) == "hackathon"
 
-    def test_program_words_still_outrank_networking(self):
-        assert classify_kind(make_event(title="Accelerator Demo Day")) == "program"
+    def test_a_networking_format_outranks_a_program_word(self):
+        """A demo day about an accelerator is a demo day. This used to assert
+        the opposite, and "Accelerator Demo Day" posted at the base bar."""
+        assert classify_kind(make_event(title="Accelerator Demo Day")) == "networking"
+
+    def test_a_program_word_still_outranks_social(self):
+        """ "social" is as often an adjective as a format, so it alone does not
+        turn a program into a networking event."""
+        assert classify_kind(make_event(title="Social Impact Accelerator")) == "program"
+        assert classify_kind(make_event(title="Social Enterprise Fellowship")) == "program"
 
     def test_the_two_tiers_do_not_overlap(self):
         """A word in both would make the precedence meaningless."""
         for probe in ("hackathon", "datathon", "buildathon", "hack"):
             assert filtering.STRONG_HACKATHON_RE.search(probe)
             assert not filtering.WEAK_BUILD_RE.search(probe)
-        for probe in ("build", "jam", "league", "challenge", "competition", "workshop", "sprint"):
+        for probe in (
+            "build",
+            "jam",
+            "league",
+            "challenge",
+            "competition",
+            "workshop",
+            "sprint",
+            "hacks",
+        ):
             assert filtering.WEAK_BUILD_RE.search(probe)
             assert not filtering.STRONG_HACKATHON_RE.search(probe)
 
@@ -360,9 +377,7 @@ class TestUnmatchedKindIsJudgedAtTheBaseBar:
         """One real ingest with no Anthropic credentials. -> (seen, queued)"""
         store = Store(tmp_path / "t.db")
         monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
-        monkeypatch.setattr(
-            cli, "make_client", lambda: (_ for _ in ()).throw(RuntimeError("no key"))
-        )
+        monkeypatch.setattr(cli, "make_client", lambda: None)
         cli._ingest(self._config(), store)
         seen, depth = store.is_seen(event), store.queue_depth()
         store.close()
@@ -434,3 +449,108 @@ class TestUnmatchedKindIsJudgedAtTheBaseBar:
             store.close()
         assert len(outcomes[True]) == 1
         assert outcomes[False] == []
+
+
+# ---------------------------------------------------------------------------
+# An explicit networking format beats a program topic and an ambiguous "hacks"
+# ---------------------------------------------------------------------------
+
+
+class TestNetworkingFormatsCannotBypassTheRaisedBar:
+    """Program words were checked before networking ones, and a free-standing
+    "hacks" counted as strong hackathon evidence. So a meetup *about* an
+    accelerator was a program, "AI Life Hacks Meetup" was a hackathon, and both
+    posted at the base bar of 6 on a keyword-only deployment.
+
+    The selection tests run the shipped config.toml through `_ingest`: the
+    classification is only the cause, and the harm is what gets queued.
+    """
+
+    BYPASSED = [
+        "Startup Accelerator Networking Meetup",
+        "Accelerator Demo Day",
+        "AI Life Hacks Meetup",
+    ]
+    UNMISTAKABLE = [
+        "MHacks 2026",
+        "TartanHacks",
+        "Hack&Roll 2026",
+        "AI Agents Hackathon 2026",
+        "Hackathon Demo Day",
+        "NUS Datathon Networking Session",
+    ]
+
+    def _config(self):
+        with open(PROJECT_ROOT / "config.toml", "rb") as f:
+            interests = tomllib.load(f)["interests"]
+        return {
+            "interests": interests,
+            "scoring": {},
+            "scope": {"mode": "global"},
+            "enrich": {"enabled": False},
+            "notify": {"max_per_day": 15},
+        }
+
+    def _ingest_keyword_only(self, tmp_path, monkeypatch, title):
+        event = make_event(title=title, source="luma", location="Singapore")
+        store = Store(tmp_path / "t.db")
+        monkeypatch.setattr(cli, "fetch_all", lambda cfg: [event])
+        monkeypatch.setattr(cli, "make_client", lambda: None)
+        cli._ingest(self._config(), store)
+        seen, depth = store.is_seen(event), store.queue_depth()
+        store.close()
+        return event, seen, depth
+
+    @pytest.mark.parametrize("title", BYPASSED)
+    def test_they_classify_as_networking(self, title):
+        assert classify_kind_with_signal(make_event(title=title)) == ("networking", True)
+
+    def test_premise_they_would_clear_the_base_bar(self):
+        """If these stopped out-scoring the base bar, the selection test below
+        would pass on the score alone and prove nothing about the kind."""
+        interests = self._config()["interests"]
+        for title in self.BYPASSED:
+            event = make_event(title=title, source="luma", location="Singapore")
+            result = score_events([event], self._config(), None)[event.key]
+            assert result.score >= interests["min_score"], f"{title!r} scored {result.score}"
+            assert "held below the networking bar" in result.reason, title
+
+    @pytest.mark.parametrize("title", BYPASSED)
+    def test_none_is_selected_under_the_shipped_config(self, tmp_path, monkeypatch, title):
+        event, seen, depth = self._ingest_keyword_only(tmp_path, monkeypatch, title)
+        assert depth == 0, f"{title!r} was queued as {event.kind!r}"
+        assert seen is True
+
+    @pytest.mark.parametrize("title", UNMISTAKABLE)
+    def test_unmistakable_hackathons_are_still_selected(self, tmp_path, monkeypatch, title):
+        event, _, depth = self._ingest_keyword_only(tmp_path, monkeypatch, title)
+        assert event.kind == "hackathon"
+        assert depth == 1, f"{title!r} was blocked"
+
+    @pytest.mark.parametrize(
+        "title", ["Life Hacks for Students", "Growth Hacks", "Friday Hacks #287"]
+    )
+    def test_a_free_standing_hacks_is_only_a_weak_signal(self, title):
+        """Still a build word when nothing contradicts it -- NUS Hackers'
+        "Friday Hacks" is real -- but no longer one that overrides a format."""
+        assert not filtering.STRONG_HACKATHON_RE.search(title)
+        assert classify_kind(make_event(title=title)) == "hackathon"
+        assert classify_kind(make_event(title=f"{title} Meetup")) == "networking"
+
+    @pytest.mark.parametrize("title", ["Lifehacks Meetup", "Lifehacks for Founders"])
+    def test_lifehacks_as_one_word_is_not_a_hackathon_name(self, title):
+        assert not filtering.STRONG_HACKATHON_RE.search(title)
+
+    @pytest.mark.parametrize(
+        "title,expected",
+        [
+            ("Fellowship Info Talk", "networking"),
+            ("Bootcamp Graduates Mixer", "networking"),
+            ("Incubator Founders' Coffee", "networking"),
+            ("Antler Residency", "program"),
+            ("Startup Accelerator 2026", "program"),
+            ("AI Singapore Apprenticeship Programme", "program"),
+        ],
+    )
+    def test_program_titles_without_a_format_word_are_still_programs(self, title, expected):
+        assert classify_kind(make_event(title=title)) == expected

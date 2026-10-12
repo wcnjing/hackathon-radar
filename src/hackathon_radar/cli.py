@@ -14,7 +14,7 @@ from hackathon_radar.notify import (
     format_message,
     is_quiet_hour,
 )
-from hackathon_radar.scoring import make_client, score_events
+from hackathon_radar.scoring import degraded_scores, make_client, score_events
 from hackathon_radar.sources import fetch_all
 from hackathon_radar.store import Store
 
@@ -34,12 +34,21 @@ def _collect(config: dict, store: Store):
     scope_cfg = config.get("scope", {})
     include_full = scope_cfg.get("include_full", False)
     events = fetch_all(config)
+    # Events an earlier degraded run left undecided are carried in from the
+    # store, not left to the sources to return again. Some never will: the
+    # watchlist skips a page whose digest it has saved and the email source
+    # has already advanced past the message, both before scoring ran. A fetched
+    # copy wins when there is one, being the fresher of the two.
+    fetched = {e.key for e in events}
+    carried = [e for e in store.deferred_events() if e.key not in fetched]
+    events = [*events, *carried]
     scoped = [e for e in events if in_scope(e, scope_cfg)]
     joinable = [e for e in scoped if include_full or not e.full]
     new = [e for e in joinable if not store.is_seen(e)]
     log.info(
-        "fetched %d, in scope %d, joinable %d, new %d",
-        len(events),
+        "fetched %d (+%d deferred earlier), in scope %d, joinable %d, new %d",
+        len(fetched),
+        len(carried),
         len(scoped),
         len(joinable),
         len(new),
@@ -48,17 +57,26 @@ def _collect(config: dict, store: Store):
     try:
         client = make_client()
     except Exception as exc:
-        # A warning, not info. Running keyword-only is a supported mode for
-        # contributors, but in production it is almost always a missing or
-        # expired secret — and unlike a degraded run, these scores are treated
-        # as final and do post. That combination deserves to be visible in the
-        # Actions log rather than inferred from the absence of Claude reasons.
+        # Something is configured and the client still could not be built. That
+        # is an outage, not a keyword-only install, so its guesses are degraded:
+        # nothing posts and nothing is recorded until the client builds again.
         log.warning(
-            "Anthropic credentials unavailable (%s); scoring with keywords only. "
-            "Scores are coarse and WILL post. If this is production, check ANTHROPIC_API_KEY.",
+            "Anthropic client could not be initialised (%s: %s). DEGRADED: scoring with "
+            "keywords, and nothing will be posted or recorded until this is fixed.",
+            type(exc).__name__,
             exc,
         )
-        client = None
+        return new, degraded_scores(new, config), None
+    if client is None:
+        # A warning, not info. Running keyword-only is a supported mode for
+        # contributors, but in production it is almost always a missing
+        # secret — and unlike a degraded run, these scores are treated as final
+        # and do post. That combination deserves to be visible in the Actions
+        # log rather than inferred from the absence of Claude reasons.
+        log.warning(
+            "No Anthropic credentials configured; scoring with keywords only. "
+            "Scores are coarse and WILL post. If this is production, check ANTHROPIC_API_KEY."
+        )
     scores = score_events(new, config, client)
     return new, scores, client
 
@@ -82,7 +100,9 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
     to filter out. Deferring only skips would be a fail-safe in one direction
     and a fail-open in the other.
 
-    Both cost the same thing: a re-fetch and a re-score next run.
+    Both cost the same thing: a re-score next run. Not necessarily a re-fetch:
+    the deferred event's whole payload is stored, and `_collect` carries it in
+    whether or not its source returns it again.
 
     Deferral has a cost that lands later, at the cap. Every run of an outage
     defers its events, so the first healthy run meets the whole backlog at once
@@ -143,8 +163,9 @@ def _select(new, scores, store: Store, config: dict, cap: int, dry_run: bool):
             continue
         if len(selected) >= cap:
             if store.was_deferred(event):
-                # Not recorded: it stays new, so the next ingest re-scores it
-                # and it competes again for the room the queue has then.
+                # Not recorded: it stays new and stays in the deferred table,
+                # so the next ingest carries it in, re-scores it and it
+                # competes again for the room the queue has then.
                 log.info("hold (over cap, deferred earlier; retried next run): %s", event.title)
                 continue
             log.info("skip (over cap): %s", event.title)

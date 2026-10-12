@@ -117,20 +117,32 @@ cache (`.cache/score_cache.json`, LRU-evicted; bypass with
 schema version + model + profile + batch, so any real change busts it. Near-zero
 hit rate on the ingest path by design — its value is free repeat scoring for
 calibration, and not re-billing after a crash — which is why it is kept out of
-`data/` and is not persisted by the Actions cache.
+`data/` and is not persisted by the Actions cache. A batch counts as answered —
+cached or live — only with exactly one row per requested event id; anything
+else is not cached, and a stored entry that fails the check is dropped and
+re-asked.
 
 **Degraded scoring is never final.** When Claude was expected but failed, scores
-are tagged `degraded` and `_select` leaves skipped events *unrecorded*, so the
+are tagged `degraded` and `_select` leaves those events *unrecorded*, so the
 next ingest re-scores them. `store.record` writes the table `is_seen` reads, so
 recording a guess would bury the event permanently — one transient 529 would
-have cost a whole fetch. Running with no API key at all is a supported mode and
-is *not* degraded: those scores are that deployment's real answer. Because they
-are final, the raised networking bar applies only when the keyword classifier
-actually matched a networking word; a title that matched nothing is networking
-only by default and is judged at the base bar. Events an outage deferred are
-also not buried at the daily cap on recovery: over-cap ones are held for the
-next ingest, so the backlog spreads across runs (events never deferred are
-still recorded over the cap — that is the lost-DB guardrail).
+have cost a whole fetch. The deferred event's full payload is stored and
+`_collect` carries it into later runs itself, because the watchlist and email
+sources checkpoint before scoring and never return it again. A failure is
+contained to its batch: a 401 stops further calls but keeps what earlier batches
+(and the cache) answered. Running with no credentials configured at all is a
+supported mode and is *not* degraded: those scores are that deployment's real
+answer. A configured client that cannot be built (bad proxy or base URL, missing
+profile) is the opposite — `make_client` raises and the run is degraded. Because
+keyword-only scores are final, the raised networking bar applies only when the
+keyword classifier actually matched a networking word; a title that matched
+nothing is networking only by default and is judged at the base bar. In that
+classifier an explicit networking format ("meetup", "demo day") outranks a
+program word and a free-standing "hacks"; only format names like "hackathon" or
+"MHacks" outrank it. Events an outage deferred are also not buried at the daily
+cap on recovery: over-cap ones are held for the next ingest, so the backlog
+spreads across runs (events never deferred are still recorded over the cap —
+that is the lost-DB guardrail).
 
 **Guardrails:** seen-DB; score thresholds (6, networking 8); 30-min drip;
 15/day rolling cap; 60-day repeat-title guard; full-event filter; quiet hours
